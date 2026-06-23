@@ -1,14 +1,5 @@
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
-import type { StaticImageData } from "next/image";
-import moonFirstQuarter from "@/moon-phases/phase_first_quarter.png";
-import moonFull from "@/moon-phases/phase_full.png";
-import moonNew from "@/moon-phases/phase_new.png";
-import moonThirdQuarter from "@/moon-phases/phase_third_quarter.png";
-import moonWaningCrescent from "@/moon-phases/phase_waning_crescent.png";
-import moonWaningGibbous from "@/moon-phases/phase_waning_gibbous.png";
-import moonWaxingCrescent from "@/moon-phases/phase_waxing_crescent.png";
-import moonWaxingGibbous from "@/moon-phases/phase_waxing_gibbous.png";
 import { DISPLAY_CONFIG } from "@/lib/display-config";
 import {
   decodeStravaConnection,
@@ -167,7 +158,6 @@ export async function GET(request: NextRequest) {
   const sunMarkerTop = moonCenterY - 48 * scale;
   const moonFrameSize = 318 * scale;
   const moonDiskSize = 226 * scale;
-  const moonTextureUrl = new URL(getMoonPhaseImage(moonPhase.phase).src, request.nextUrl.origin).toString();
   const metricSize = 210 * scale;
   const metricGap = 45 * scale;
   const metricRowWidth = metricSize * 4 + metricGap * 3;
@@ -296,7 +286,7 @@ export async function GET(request: NextRequest) {
             justifyContent: "center",
           }}
         >
-          <MoonPhase phase={moonPhase} imageUrl={moonTextureUrl} size={moonDiskSize} />
+          <MoonPhase phase={moonPhase} size={moonDiskSize} />
         </div>
 
         <div
@@ -1179,43 +1169,16 @@ function positiveModulo(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
-function getMoonPhaseImage(phase: number): StaticImageData {
-  const normalized = positiveModulo(phase, 1);
-
-  if (normalized < 1 / 16 || normalized >= 15 / 16) {
-    return moonNew;
-  }
-
-  if (normalized < 3 / 16) {
-    return moonWaxingCrescent;
-  }
-
-  if (normalized < 5 / 16) {
-    return moonFirstQuarter;
-  }
-
-  if (normalized < 7 / 16) {
-    return moonWaxingGibbous;
-  }
-
-  if (normalized < 9 / 16) {
-    return moonFull;
-  }
-
-  if (normalized < 11 / 16) {
-    return moonWaningGibbous;
-  }
-
-  if (normalized < 13 / 16) {
-    return moonThirdQuarter;
-  }
-
-  return moonWaningCrescent;
-}
-
-function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: string; size: number }) {
+function MoonPhase({ phase, size }: { phase: MoonPhaseData; size: number }) {
   const frameSize = size + 92;
+  const normalizedPhase = positiveModulo(phase.phase, 1);
   const illumination = Math.round(phase.illumination * 100);
+  const center = size / 2;
+  const radius = size * 0.49;
+  const litPath = getMoonPhaseLitPath(normalizedPhase, center, radius);
+  const glowOpacity = 0.08 + phase.illumination * 0.3;
+  const gradientId = "moon-lit-gradient";
+  const litClipId = "moon-lit-clip";
 
   return (
     <div
@@ -1240,22 +1203,77 @@ function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: 
           justifyContent: "center",
         }}
       >
-        <img
-          alt={`Moon phase ${illumination}% illuminated`}
-          src={imageUrl}
+        <svg
           width={size}
           height={size}
-          style={{
-            display: "block",
-            width: size,
-            height: size,
-            objectFit: "cover",
-            borderRadius: 999,
-          }}
-        />
+          viewBox={`0 0 ${size} ${size}`}
+          style={{ display: "block", width: size, height: size }}
+          aria-label={`Moon phase ${illumination}% illuminated`}
+        >
+          <defs>
+            <radialGradient id={gradientId} cx="36%" cy="31%" r="76%">
+              <stop offset="0%" stopColor="#f5f3e9" />
+              <stop offset="48%" stopColor="#c8c6bd" />
+              <stop offset="100%" stopColor="#74736d" />
+            </radialGradient>
+            {litPath ? (
+              <clipPath id={litClipId}>
+                <path d={litPath} />
+              </clipPath>
+            ) : null}
+          </defs>
+          <circle cx={center} cy={center} r={radius} fill="#020202" />
+          <circle cx={center} cy={center} r={radius} fill="#ffffff" opacity={glowOpacity} />
+          {litPath ? (
+            <>
+              <path d={litPath} fill={`url(#${gradientId})`} />
+              <g clipPath={`url(#${litClipId})`} opacity="0.34">
+                <circle cx={center - radius * 0.26} cy={center - radius * 0.26} r={radius * 0.105} fill="#5c5a55" />
+                <circle cx={center + radius * 0.18} cy={center - radius * 0.36} r={radius * 0.075} fill="#6b6962" />
+                <circle cx={center + radius * 0.34} cy={center + radius * 0.02} r={radius * 0.13} fill="#58564f" />
+                <circle cx={center - radius * 0.1} cy={center + radius * 0.28} r={radius * 0.09} fill="#66645d" />
+                <circle cx={center + radius * 0.02} cy={center - radius * 0.02} r={radius * 0.06} fill="#817f76" />
+              </g>
+              <path d={litPath} fill="none" stroke="#ffffff" strokeOpacity="0.18" strokeWidth={radius * 0.018} />
+            </>
+          ) : null}
+          <circle cx={center} cy={center} r={radius} fill="none" stroke="#ffffff" strokeOpacity="0.22" strokeWidth={radius * 0.018} />
+        </svg>
       </div>
     </div>
   );
+}
+
+function getMoonPhaseLitPath(phase: number, center: number, radius: number) {
+  const top = `${center} ${center - radius}`;
+  const bottom = `${center} ${center + radius}`;
+  const minArcRadius = 0.001;
+
+  if (phase < 1 / 512 || phase > 511 / 512) {
+    return null;
+  }
+
+  if (phase < 0.25) {
+    const terminatorRadius = Math.max(radius * (1 - phase / 0.25), minArcRadius);
+
+    return `M ${top} A ${radius} ${radius} 0 0 1 ${bottom} A ${terminatorRadius} ${radius} 0 0 0 ${top} Z`;
+  }
+
+  if (phase < 0.5) {
+    const terminatorRadius = Math.max(radius * ((phase - 0.25) / 0.25), minArcRadius);
+
+    return `M ${top} A ${radius} ${radius} 0 0 1 ${bottom} A ${terminatorRadius} ${radius} 0 0 1 ${top} Z`;
+  }
+
+  if (phase < 0.75) {
+    const terminatorRadius = Math.max(radius * (1 - (phase - 0.5) / 0.25), minArcRadius);
+
+    return `M ${top} A ${radius} ${radius} 0 0 0 ${bottom} A ${terminatorRadius} ${radius} 0 0 0 ${top} Z`;
+  }
+
+  const terminatorRadius = Math.max(radius * ((phase - 0.75) / 0.25), minArcRadius);
+
+  return `M ${top} A ${radius} ${radius} 0 0 0 ${bottom} A ${terminatorRadius} ${radius} 0 0 1 ${top} Z`;
 }
 
 function polarPoint(cx: number, cy: number, radius: number, angle: number) {
