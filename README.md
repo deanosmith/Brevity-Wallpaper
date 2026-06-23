@@ -1,6 +1,6 @@
 # Brevity Wallpaper
 
-Daily iPhone 15 wallpaper generator for sunrise, sunset, today's weather, and moon phase. The app is built as a Vercel-ready Next.js project and exposes a PNG route that can be used directly from iOS Shortcuts.
+A daily wallpaper brief containing various glance-able metrics: sunrise, sunset, today's weather, and moon phases. The app is built as a Vercel-ready Next.js project and exposes a PNG route that can be used directly from iOS Shortcuts.
 
 ## iOS Shortcut
 
