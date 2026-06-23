@@ -340,8 +340,8 @@ function serializeStravaCookie(value: string, secure: boolean) {
 
 function StarryBackdrop({ width, height, theme }: { width: number; height: number; theme: ThemeTokens }) {
   const scale = width / 1179;
-  const tinyStars = Array.from({ length: 250 });
-  const brightStars = Array.from({ length: 34 });
+  const tinyStars = Array.from({ length: 750 });
+  const brightStars = Array.from({ length: 102 });
   const starTones = ["#f7f9ff", "#dbe8ff", "#fff4dd", "#e8f1ff"];
 
   return (
@@ -386,7 +386,7 @@ function StarryBackdrop({ width, height, theme }: { width: number; height: numbe
           />
         );
       })}
-      {Array.from({ length: 9 }).map((_, index) => {
+      {Array.from({ length: 27 }).map((_, index) => {
         const x = hashUnit(index, 67) * width;
         const y = hashUnit(index, 71) * height;
         const ray = (2.1 + hashUnit(index, 73) * 1.4) * scale;
@@ -513,7 +513,7 @@ function RunningSummary({
             letterSpacing: 0,
           }}
         >
-          W {formatStravaDistance(summary?.lastWeekDistanceKm ?? null)}
+          {formatStravaDistance(summary?.lastWeekDistanceKm ?? null)}
         </span>
         <span
           style={{
@@ -524,7 +524,7 @@ function RunningSummary({
             letterSpacing: 0,
           }}
         >
-          M {formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null)}
+          {formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null)}
         </span>
       </div>
     </div>
@@ -728,9 +728,6 @@ function TemperatureDial({
 }) {
   const highColor = temperatureColor(range.highGraph);
   const lowColor = temperatureColor(range.lowGraph);
-  const labelFontSize = size * 0.067;
-  const labelTop = size * 0.858;
-  const labelWidth = size * 0.16;
 
   return (
     <div style={{ display: "flex", position: "relative", width: size, height: size }}>
@@ -765,50 +762,6 @@ function TemperatureDial({
         </span>
         <span style={{ color: lowColor, fontSize: 31 * scale, fontWeight: 400, lineHeight: 0.95 }}>
           {range.low ?? "--"}
-        </span>
-      </div>
-      <div
-        style={{
-          display: "flex",
-          position: "absolute",
-          left: size * 0.38 - labelWidth,
-          top: labelTop,
-          width: labelWidth,
-          justifyContent: "flex-end",
-        }}
-      >
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: labelFontSize,
-            fontWeight: 400,
-            lineHeight: 1,
-            opacity: 0.62,
-          }}
-        >
-          {TEMPERATURE_DIAL_MIN}
-        </span>
-      </div>
-      <div
-        style={{
-          display: "flex",
-          position: "absolute",
-          left: size * 0.62,
-          top: labelTop,
-          width: labelWidth,
-          justifyContent: "flex-start",
-        }}
-      >
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: labelFontSize,
-            fontWeight: 400,
-            lineHeight: 1,
-            opacity: 0.62,
-          }}
-        >
-          {TEMPERATURE_DIAL_MAX}
         </span>
       </div>
     </div>
