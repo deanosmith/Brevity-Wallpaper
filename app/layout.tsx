@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Brevity Wallpaper",
-  description: "Daily iPhone 15 wallpaper generator for weather, light, and an NKJV verse.",
+  description: "Daily iPhone 15 wallpaper generator for weather, light, and moon phase.",
 };
 
 export default function RootLayout({

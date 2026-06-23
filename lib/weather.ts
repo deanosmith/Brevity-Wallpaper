@@ -6,12 +6,13 @@ export type WeatherSnapshot = {
   high: number | null;
   low: number | null;
   rainChance: number | null;
+  rainPeakTime: string | null;
   windMax: number | null;
+  windDirection: number | null;
   uvMax: number | null;
   sunrise: string | null;
   sunset: string | null;
   weatherCode: number | null;
-  currentTemperature: number | null;
   currentWeatherCode: number | null;
   temperatureUnitLabel: string;
   windUnitLabel: string;
@@ -20,11 +21,7 @@ export type WeatherSnapshot = {
 type OpenMeteoResponse = {
   timezone?: string;
   current?: {
-    temperature_2m?: number;
     weather_code?: number;
-  };
-  current_units?: {
-    temperature_2m?: string;
   };
   daily?: {
     time?: string[];
@@ -32,10 +29,15 @@ type OpenMeteoResponse = {
     temperature_2m_min?: number[];
     precipitation_probability_max?: number[];
     wind_speed_10m_max?: number[];
+    wind_direction_10m_dominant?: number[];
     uv_index_max?: number[];
     sunrise?: string[];
     sunset?: string[];
     weather_code?: number[];
+  };
+  hourly?: {
+    time?: string[];
+    precipitation_probability?: number[];
   };
   daily_units?: {
     temperature_2m_max?: string;
@@ -99,9 +101,10 @@ export async function getWeatherSnapshot({
     timezone: "auto",
     temperature_unit: temperatureUnit,
     wind_speed_unit: windUnit,
-    current: "temperature_2m,weather_code",
+    current: "weather_code",
     daily:
-      "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,wind_speed_10m_max",
+      "weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,wind_speed_10m_max,wind_direction_10m_dominant",
+    hourly: "precipitation_probability",
   });
 
   const timeoutSignal =
@@ -126,23 +129,46 @@ export async function getWeatherSnapshot({
     high: valueAt(daily.temperature_2m_max),
     low: valueAt(daily.temperature_2m_min),
     rainChance: valueAt(daily.precipitation_probability_max),
+    rainPeakTime: peakTime(data.hourly?.time, data.hourly?.precipitation_probability),
     windMax: valueAt(daily.wind_speed_10m_max),
+    windDirection: valueAt(daily.wind_direction_10m_dominant),
     uvMax: valueAt(daily.uv_index_max),
     sunrise: daily.sunrise?.[0] ?? null,
     sunset: daily.sunset?.[0] ?? null,
     weatherCode: valueAt(daily.weather_code),
-    currentTemperature: data.current?.temperature_2m ?? null,
     currentWeatherCode: data.current?.weather_code ?? null,
     temperatureUnitLabel:
-      data.daily_units?.temperature_2m_max ?? data.current_units?.temperature_2m ?? unitLabel(temperatureUnit),
+      data.daily_units?.temperature_2m_max ?? unitLabel(temperatureUnit),
     windUnitLabel: data.daily_units?.wind_speed_10m_max ?? (windUnit === "kmh" ? "km/h" : "mph"),
   };
 }
 
-function valueAt(values?: number[]) {
+function valueAt(values?: number[]): number | null {
   const value = values?.[0];
 
-  return Number.isFinite(value) ? value : null;
+  return Number.isFinite(value) ? (value as number) : null;
+}
+
+function peakTime(times?: string[], values?: number[]) {
+  if (!times?.length || !values?.length) {
+    return null;
+  }
+
+  let peakIndex = -1;
+  let peakValue = -Infinity;
+
+  values.forEach((value, index) => {
+    if (!Number.isFinite(value) || !times[index]) {
+      return;
+    }
+
+    if (value > peakValue) {
+      peakValue = value;
+      peakIndex = index;
+    }
+  });
+
+  return peakIndex >= 0 ? times[peakIndex] : null;
 }
 
 function unitLabel(unit: TemperatureUnit) {

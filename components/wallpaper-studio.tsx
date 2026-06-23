@@ -27,8 +27,6 @@ export function WallpaperStudio() {
   const [theme, setTheme] = useState<WallpaperTheme>(DISPLAY_CONFIG.theme);
   const [temperatureUnit, setTemperatureUnit] = useState<TemperatureUnit>(DISPLAY_CONFIG.temperatureUnit);
   const [windUnit, setWindUnit] = useState<WindUnit>(DISPLAY_CONFIG.windUnit);
-  const [verse, setVerse] = useState("");
-  const [reference, setReference] = useState("");
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
@@ -47,16 +45,8 @@ export function WallpaperStudio() {
       wind: windUnit,
     });
 
-    if (verse.trim()) {
-      params.set("verse", verse.trim());
-    }
-
-    if (reference.trim()) {
-      params.set("reference", reference.trim());
-    }
-
     return `/api/wallpaper?${params.toString()}`;
-  }, [label, latitude, longitude, theme, temperatureUnit, windUnit, verse, reference]);
+  }, [label, latitude, longitude, theme, temperatureUnit, windUnit]);
 
   const absoluteWallpaperUrl = origin ? `${origin}${wallpaperUrl}` : wallpaperUrl;
 
@@ -274,34 +264,6 @@ export function WallpaperStudio() {
                   <option value="mph">mph</option>
                   <option value="kmh">km/h</option>
                 </select>
-              </div>
-            </section>
-
-            <section className="section">
-              <div className="section-heading">
-                <span>NKJV Verse</span>
-              </div>
-
-              <div className="field">
-                <label htmlFor="verse">Verse text</label>
-                <textarea
-                  id="verse"
-                  className="textarea"
-                  value={verse}
-                  onChange={(event) => setVerse(event.target.value)}
-                  placeholder="NKJV verse text"
-                />
-              </div>
-
-              <div className="field">
-                <label htmlFor="reference">Reference</label>
-                <input
-                  id="reference"
-                  className="input"
-                  value={reference}
-                  onChange={(event) => setReference(event.target.value)}
-                  placeholder="Psalm 118:24"
-                />
               </div>
             </section>
 

@@ -186,6 +186,11 @@ h1 {
   padding: 10px 12px;
 }
 
+.select option {
+  background: var(--panel);
+  color: var(--ink);
+}
+
 .textarea {
   min-height: 96px;
   resize: vertical;

@@ -5,7 +5,6 @@ type DisplayConfig = {
   theme: WallpaperTheme;
   temperatureUnit: TemperatureUnit;
   windUnit: WindUnit;
-  verseTranslation: "NKJV";
   sections: {
     sunrise: boolean;
     sunset: boolean;
@@ -16,7 +15,6 @@ type DisplayConfig = {
       windMax: boolean;
       uvMax: boolean;
     };
-    verseOfTheDay: boolean;
   };
 };
 
@@ -25,7 +23,6 @@ export const DISPLAY_CONFIG: DisplayConfig = {
   theme: DEFAULT_THEME,
   temperatureUnit: "celsius",
   windUnit: "kmh",
-  verseTranslation: "NKJV",
   sections: {
     sunrise: true,
     sunset: true,
@@ -36,6 +33,5 @@ export const DISPLAY_CONFIG: DisplayConfig = {
       windMax: true,
       uvMax: true,
     },
-    verseOfTheDay: true,
   },
 };
