@@ -44,6 +44,7 @@ const STRAVA_API_BASE = "https://www.strava.com/api/v3";
 const STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token";
 const STRAVA_PAGE_SIZE = 100;
 const MAX_STRAVA_PAGES = 4;
+const STRAVA_REQUEST_TIMEOUT_MS = 4500;
 const DEFAULT_STRAVA_TIME_ZONE = "Europe/Copenhagen";
 export const STRAVA_CONNECTION_COOKIE = "brevity_strava_connection";
 
@@ -138,6 +139,7 @@ export async function exchangeStravaAuthorizationCode(code: string): Promise<Str
     headers: {
       "content-type": "application/x-www-form-urlencoded",
     },
+    signal: stravaRequestSignal(),
     body: new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
@@ -211,6 +213,7 @@ async function getStravaAccessToken(now: Date, tokenSet: StravaTokenSet | null) 
     headers: {
       "content-type": "application/x-www-form-urlencoded",
     },
+    signal: stravaRequestSignal(),
     body: new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
@@ -256,6 +259,7 @@ function base64UrlDecode(value: string) {
 
 async function getStravaActivities(accessToken: string, after: number, before: number) {
   const activities: StravaActivity[] = [];
+  const signal = stravaRequestSignal();
 
   for (let page = 1; page <= MAX_STRAVA_PAGES; page += 1) {
     const params = new URLSearchParams({
@@ -268,6 +272,7 @@ async function getStravaActivities(accessToken: string, after: number, before: n
       headers: {
         authorization: `Bearer ${accessToken}`,
       },
+      signal,
     });
 
     if (!response.ok) {
@@ -283,6 +288,17 @@ async function getStravaActivities(accessToken: string, after: number, before: n
   }
 
   return activities;
+}
+
+function stravaRequestSignal() {
+  if (typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(STRAVA_REQUEST_TIMEOUT_MS);
+  }
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), STRAVA_REQUEST_TIMEOUT_MS);
+
+  return controller.signal;
 }
 
 function summarizeRuns(

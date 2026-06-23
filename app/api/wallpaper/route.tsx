@@ -48,6 +48,7 @@ type MetricData = {
   value: string;
   icon: MetricIconName;
   graph?: number;
+  hideDial?: boolean;
   subValue?: string | null;
 };
 
@@ -65,6 +66,17 @@ type MoonPhaseData = {
   illumination: number;
 };
 
+type MoonPhaseAsset = {
+  id: string;
+  label: string;
+  path: string;
+};
+
+type MoonPhaseImageData = MoonPhaseAsset & {
+  src: string | null;
+  illumination: number;
+};
+
 const SYNODIC_MONTH_DAYS = 29.530588853;
 const KNOWN_NEW_MOON_UTC = Date.UTC(2000, 0, 6, 18, 14);
 const SIX_MONTHS_SECONDS = 60 * 60 * 24 * 180;
@@ -73,6 +85,19 @@ const UV_DIAL_COLOR = "#ff3b30";
 const TEMPERATURE_DIAL_MIN = -6;
 const TEMPERATURE_DIAL_MAX = 30;
 const TEMPERATURE_DIAL_SWEEP = 356;
+const MOON_PHASE_ASSET_VERSION = "hires-1024-20260623";
+const MOON_PHASE_ASSET_TIMEOUT_MS = 2500;
+const MOON_PHASE_ASSETS: MoonPhaseAsset[] = [
+  { id: "new", label: "New moon", path: "/moon-phases/phase_new.png" },
+  { id: "waxing-crescent", label: "Waxing crescent", path: "/moon-phases/phase_waxing_crescent.png" },
+  { id: "first-quarter", label: "First quarter", path: "/moon-phases/phase_first_quarter.png" },
+  { id: "waxing-gibbous", label: "Waxing gibbous", path: "/moon-phases/phase_waxing_gibbous.png" },
+  { id: "full", label: "Full moon", path: "/moon-phases/phase_full.png" },
+  { id: "waning-gibbous", label: "Waning gibbous", path: "/moon-phases/phase_waning_gibbous.png" },
+  { id: "third-quarter", label: "Third quarter", path: "/moon-phases/phase_third_quarter.png" },
+  { id: "waning-crescent", label: "Waning crescent", path: "/moon-phases/phase_waning_crescent.png" },
+];
+const moonPhaseImageCache = new Map<string, Promise<string | null>>();
 
 const THEMES: Record<WallpaperTheme, ThemeTokens> = {
   dawn: {
@@ -151,6 +176,7 @@ export async function GET(request: NextRequest) {
   const now = Date.now();
   const nowDate = new Date(now);
   const moonPhase = getMoonPhase(now);
+  const moonPhaseImagePromise = getMoonPhaseImage(moonPhase, request.nextUrl.origin);
   const scale = width / 1179;
   const centerX = width / 2;
   const displayLift = height * 0.08;
@@ -192,6 +218,7 @@ export async function GET(request: NextRequest) {
           value: formatPercent(weather.rainChance),
           icon: "rain",
           graph: normalizePercent(weather.rainChance),
+          hideDial: isRoundedZero(weather.rainChance),
           subValue: formatRainPeakTime(weather.rainChance, weather.rainPeakTime),
         }
       : null,
@@ -217,6 +244,7 @@ export async function GET(request: NextRequest) {
   const rainMetric = weatherMetrics.find((metric) => metric.id === "rain");
   const windMetric = weatherMetrics.find((metric) => metric.id === "wind");
   const uvMetric = weatherMetrics.find((metric) => metric.id === "uv");
+  const moonPhaseImage = await moonPhaseImagePromise;
   const headers: Record<string, string> = {
     "cache-control": "private, no-store",
   };
@@ -286,7 +314,7 @@ export async function GET(request: NextRequest) {
             justifyContent: "center",
           }}
         >
-          <MoonPhase phase={moonPhase} size={moonDiskSize} />
+          <MoonPhase image={moonPhaseImage} size={moonDiskSize} />
         </div>
 
         <div
@@ -639,7 +667,9 @@ function MetricDial({
 
   return (
     <div style={{ display: "flex", position: "relative", width: size, height: size }}>
-      <DialRings progress={metric.graph ?? 0.2} theme={theme} size={size} accent={dialColor} />
+      {metric.hideDial ? null : (
+        <DialRings progress={metric.graph ?? 0.2} theme={theme} size={size} accent={dialColor} />
+      )}
       <div
         style={{
           display: "flex",
@@ -1050,6 +1080,10 @@ function normalizeRatio(value: number | null, min: number, max: number) {
   return Math.min(1, Math.max(0, (value - min) / (max - min)));
 }
 
+function isRoundedZero(value: number | null) {
+  return value !== null && Math.round(value) === 0;
+}
+
 async function safelyGetStravaRunSummary(now: Date, stravaConnection: ReturnType<typeof decodeStravaConnection>) {
   try {
     return await getStravaRunSummary(now, stravaConnection);
@@ -1169,16 +1203,82 @@ function positiveModulo(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
-function MoonPhase({ phase, size }: { phase: MoonPhaseData; size: number }) {
+async function getMoonPhaseImage(phase: MoonPhaseData, origin: string): Promise<MoonPhaseImageData> {
+  const asset = getMoonPhaseAsset(phase.phase);
+  const src = await loadMoonPhaseImageSource(asset, origin);
+
+  return {
+    ...asset,
+    src,
+    illumination: phase.illumination,
+  };
+}
+
+function getMoonPhaseAsset(phase: number) {
+  const normalizedPhase = positiveModulo(phase, 1);
+  const assetIndex = Math.round(normalizedPhase * MOON_PHASE_ASSETS.length) % MOON_PHASE_ASSETS.length;
+
+  return MOON_PHASE_ASSETS[assetIndex];
+}
+
+function loadMoonPhaseImageSource(asset: MoonPhaseAsset, origin: string) {
+  const url = new URL(asset.path, origin);
+  url.searchParams.set("v", MOON_PHASE_ASSET_VERSION);
+
+  const cacheKey = url.toString();
+  const cached = moonPhaseImageCache.get(cacheKey);
+
+  if (cached) {
+    return cached;
+  }
+
+  const loaded = fetch(cacheKey, {
+    cache: "force-cache",
+    signal: moonPhaseAssetSignal(),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Moon phase asset failed with ${response.status}`);
+      }
+
+      const contentType = response.headers.get("content-type") ?? "image/png";
+      const buffer = await response.arrayBuffer();
+
+      return `data:${contentType};base64,${arrayBufferToBase64(buffer)}`;
+    })
+    .catch(() => null);
+
+  moonPhaseImageCache.set(cacheKey, loaded);
+
+  return loaded;
+}
+
+function moonPhaseAssetSignal() {
+  if (typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(MOON_PHASE_ASSET_TIMEOUT_MS);
+  }
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), MOON_PHASE_ASSET_TIMEOUT_MS);
+
+  return controller.signal;
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+
+  return btoa(binary);
+}
+
+function MoonPhase({ image, size }: { image: MoonPhaseImageData; size: number }) {
   const frameSize = size + 92;
-  const normalizedPhase = positiveModulo(phase.phase, 1);
-  const illumination = Math.round(phase.illumination * 100);
-  const center = size / 2;
-  const radius = size * 0.49;
-  const litPath = getMoonPhaseLitPath(normalizedPhase, center, radius);
-  const glowOpacity = 0.08 + phase.illumination * 0.3;
-  const gradientId = "moon-lit-gradient";
-  const litClipId = "moon-lit-clip";
+  const illumination = Math.round(image.illumination * 100);
 
   return (
     <div
@@ -1203,77 +1303,35 @@ function MoonPhase({ phase, size }: { phase: MoonPhaseData; size: number }) {
           justifyContent: "center",
         }}
       >
-        <svg
-          width={size}
-          height={size}
-          viewBox={`0 0 ${size} ${size}`}
-          style={{ display: "block", width: size, height: size }}
-          aria-label={`Moon phase ${illumination}% illuminated`}
-        >
-          <defs>
-            <radialGradient id={gradientId} cx="36%" cy="31%" r="76%">
-              <stop offset="0%" stopColor="#f5f3e9" />
-              <stop offset="48%" stopColor="#c8c6bd" />
-              <stop offset="100%" stopColor="#74736d" />
-            </radialGradient>
-            {litPath ? (
-              <clipPath id={litClipId}>
-                <path d={litPath} />
-              </clipPath>
-            ) : null}
-          </defs>
-          <circle cx={center} cy={center} r={radius} fill="#020202" />
-          <circle cx={center} cy={center} r={radius} fill="#ffffff" opacity={glowOpacity} />
-          {litPath ? (
-            <>
-              <path d={litPath} fill={`url(#${gradientId})`} />
-              <g clipPath={`url(#${litClipId})`} opacity="0.34">
-                <circle cx={center - radius * 0.26} cy={center - radius * 0.26} r={radius * 0.105} fill="#5c5a55" />
-                <circle cx={center + radius * 0.18} cy={center - radius * 0.36} r={radius * 0.075} fill="#6b6962" />
-                <circle cx={center + radius * 0.34} cy={center + radius * 0.02} r={radius * 0.13} fill="#58564f" />
-                <circle cx={center - radius * 0.1} cy={center + radius * 0.28} r={radius * 0.09} fill="#66645d" />
-                <circle cx={center + radius * 0.02} cy={center - radius * 0.02} r={radius * 0.06} fill="#817f76" />
-              </g>
-              <path d={litPath} fill="none" stroke="#ffffff" strokeOpacity="0.18" strokeWidth={radius * 0.018} />
-            </>
-          ) : null}
-          <circle cx={center} cy={center} r={radius} fill="none" stroke="#ffffff" strokeOpacity="0.22" strokeWidth={radius * 0.018} />
-        </svg>
+        {image.src ? (
+          <img
+            src={image.src}
+            width={size}
+            height={size}
+            alt={`${image.label}, ${illumination}% illuminated`}
+            style={{
+              display: "block",
+              width: size,
+              height: size,
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              width: size,
+              height: size,
+              borderRadius: 999,
+              background: "#020202",
+              borderColor: "rgba(255, 255, 255, 0.18)",
+              borderStyle: "solid",
+              borderWidth: 1,
+            }}
+          />
+        )}
       </div>
     </div>
   );
-}
-
-function getMoonPhaseLitPath(phase: number, center: number, radius: number) {
-  const top = `${center} ${center - radius}`;
-  const bottom = `${center} ${center + radius}`;
-  const minArcRadius = 0.001;
-
-  if (phase < 1 / 512 || phase > 511 / 512) {
-    return null;
-  }
-
-  if (phase < 0.25) {
-    const terminatorRadius = Math.max(radius * (1 - phase / 0.25), minArcRadius);
-
-    return `M ${top} A ${radius} ${radius} 0 0 1 ${bottom} A ${terminatorRadius} ${radius} 0 0 0 ${top} Z`;
-  }
-
-  if (phase < 0.5) {
-    const terminatorRadius = Math.max(radius * ((phase - 0.25) / 0.25), minArcRadius);
-
-    return `M ${top} A ${radius} ${radius} 0 0 1 ${bottom} A ${terminatorRadius} ${radius} 0 0 1 ${top} Z`;
-  }
-
-  if (phase < 0.75) {
-    const terminatorRadius = Math.max(radius * (1 - (phase - 0.5) / 0.25), minArcRadius);
-
-    return `M ${top} A ${radius} ${radius} 0 0 0 ${bottom} A ${terminatorRadius} ${radius} 0 0 0 ${top} Z`;
-  }
-
-  const terminatorRadius = Math.max(radius * ((phase - 0.75) / 0.25), minArcRadius);
-
-  return `M ${top} A ${radius} ${radius} 0 0 0 ${bottom} A ${terminatorRadius} ${radius} 0 0 1 ${top} Z`;
 }
 
 function polarPoint(cx: number, cy: number, radius: number, angle: number) {
