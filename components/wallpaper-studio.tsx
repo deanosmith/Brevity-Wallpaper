@@ -20,6 +20,15 @@ type SearchResult = {
   timezone?: string;
 };
 
+type StravaStatus = {
+  connected: boolean;
+  source: "browser" | "environment" | "none";
+  oauthConfigured: boolean;
+  scope: string | null;
+  athleteId: number | null;
+  connectedAt: number | null;
+};
+
 export function WallpaperStudio() {
   const [label, setLabel] = useState(DEFAULT_LOCATION.label);
   const [latitude, setLatitude] = useState(String(DEFAULT_LOCATION.latitude));
@@ -33,6 +42,9 @@ export function WallpaperStudio() {
   const [message, setMessage] = useState("");
   const [previewError, setPreviewError] = useState("");
   const [origin, setOrigin] = useState("");
+  const [stravaStatus, setStravaStatus] = useState<StravaStatus | null>(null);
+  const [isDisconnectingStrava, setIsDisconnectingStrava] = useState(false);
+  const [previewNonce, setPreviewNonce] = useState(0);
 
   const wallpaperUrl = useMemo(() => {
     const params = new URLSearchParams({
@@ -52,11 +64,49 @@ export function WallpaperStudio() {
 
   useEffect(() => {
     setOrigin(window.location.origin);
+
+    const params = new URLSearchParams(window.location.search);
+    const stravaResult = params.get("strava");
+
+    if (stravaResult === "connected") {
+      setMessage("Strava connected.");
+      window.history.replaceState(null, "", window.location.pathname);
+    } else if (stravaResult === "missing_config") {
+      setMessage("Strava client credentials are missing.");
+      window.history.replaceState(null, "", window.location.pathname);
+    } else if (stravaResult === "denied") {
+      setMessage("Strava connection was not approved.");
+      window.history.replaceState(null, "", window.location.pathname);
+    } else if (stravaResult === "invalid_state" || stravaResult === "exchange_failed") {
+      setMessage("Strava connection could not be completed.");
+      window.history.replaceState(null, "", window.location.pathname);
+    }
   }, []);
 
   useEffect(() => {
     setPreviewError("");
   }, [wallpaperUrl]);
+
+  useEffect(() => {
+    void refreshStravaStatus();
+  }, []);
+
+  async function refreshStravaStatus() {
+    try {
+      const response = await fetch("/api/strava/status", {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        throw new Error("Strava status failed");
+      }
+
+      setStravaStatus((await response.json()) as StravaStatus);
+      setPreviewNonce((nonce) => nonce + 1);
+    } catch {
+      setStravaStatus(null);
+    }
+  }
 
   async function searchLocation() {
     const trimmedQuery = query.trim();
@@ -129,6 +179,44 @@ export function WallpaperStudio() {
     } catch {
       setMessage("Clipboard access is unavailable.");
     }
+  }
+
+  async function disconnectStrava() {
+    setIsDisconnectingStrava(true);
+    setMessage("");
+
+    try {
+      const response = await fetch("/api/strava/disconnect", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        throw new Error("Disconnect failed");
+      }
+
+      setMessage("Strava disconnected.");
+      await refreshStravaStatus();
+    } catch {
+      setMessage("Strava could not be disconnected.");
+    } finally {
+      setIsDisconnectingStrava(false);
+    }
+  }
+
+  function stravaStatusText() {
+    if (!stravaStatus) {
+      return "Checking";
+    }
+
+    if (stravaStatus.source === "browser") {
+      return "Connected";
+    }
+
+    if (stravaStatus.source === "environment") {
+      return "Environment tokens";
+    }
+
+    return "Not connected";
   }
 
   return (
@@ -268,6 +356,46 @@ export function WallpaperStudio() {
             </section>
 
             <section className="section">
+              <div className="section-heading">
+                <span>Strava</span>
+                <span className="status-inline">
+                  <span className={stravaStatus?.connected ? "status-dot active" : "status-dot"} />
+                  {stravaStatusText()}
+                </span>
+              </div>
+
+              <div className="strava-box">
+                <div className="strava-copy">
+                  <span>{stravaStatus?.source === "browser" ? "Browser connection" : "Running data"}</span>
+                  <p>
+                    {stravaStatus?.source === "browser"
+                      ? "OAuth is connected for previews and downloads in this browser."
+                      : stravaStatus?.source === "environment"
+                        ? "Using STRAVA_* environment values for the wallpaper."
+                        : "Connect once to authorize running activity access."}
+                  </p>
+                </div>
+                <div className="actions">
+                  <a
+                    className={stravaStatus?.oauthConfigured === false ? "button disabled" : "button primary"}
+                    href={stravaStatus?.oauthConfigured === false ? undefined : "/api/strava/connect"}
+                    aria-disabled={stravaStatus?.oauthConfigured === false}
+                  >
+                    {stravaStatus?.connected ? "Reconnect" : "Connect"}
+                  </a>
+                  <button
+                    className="button"
+                    type="button"
+                    onClick={() => void disconnectStrava()}
+                    disabled={isDisconnectingStrava || stravaStatus?.source !== "browser"}
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            </section>
+
+            <section className="section">
               <div className="actions">
                 <a className="button primary" href={wallpaperUrl} download="brevity-wallpaper.png">
                   Download PNG
@@ -288,7 +416,7 @@ export function WallpaperStudio() {
               <div className="phone-shadow" aria-label="Wallpaper preview">
                 <div className="phone-screen">
                   <img
-                    key={wallpaperUrl}
+                    key={`${wallpaperUrl}:${previewNonce}`}
                     className="wallpaper-preview"
                     src={wallpaperUrl}
                     alt="Generated wallpaper preview"

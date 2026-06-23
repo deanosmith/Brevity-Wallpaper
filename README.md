@@ -22,5 +22,31 @@ For a daily wallpaper, run that Shortcut from a personal automation.
 - Sunrise
 - Sunset
 - Moon phase for the generation time
+- Strava running distance for the last complete week and last four complete weeks
+
+## Strava Environment Variables
+
+For local development, place the Strava values in `.env`. On Vercel, add the same keys under Environment Variables.
+
+Required for the Connect Strava button:
+
+- `STRAVA_CLIENT_ID`
+- `STRAVA_CLIENT_SECRET`
+
+Optional server-side tokens for the wallpaper route and iOS Shortcuts:
+
+- `STRAVA_REFRESH_TOKEN`
+- `STRAVA_ACCESS_TOKEN`
+- `STRAVA_ACCESS_TOKEN_EXPIRES_AT`
+
+Optional:
+
+- `STRAVA_REDIRECT_URI`
+- `STRAVA_SCOPE`
+- `STRAVA_TIME_ZONE`
+
+The app requests `activity:read_all` by default so private runs can be included. Set `STRAVA_SCOPE=activity:read` if you only want activities visible to Everyone and Followers. `STRAVA_ACCESS_TOKEN_EXPIRES_AT` is optional; if it is absent, the app will try the access token as-is.
+Strava can rotate refresh tokens after a refresh, so for long-running server-side use, keep `STRAVA_REFRESH_TOKEN` current in Vercel.
+In the Strava developer settings, set the authorization callback domain to your deployed host. Localhost and `127.0.0.1` are allowed for local development.
 
 `Feel free to fork and customise`

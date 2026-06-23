@@ -1,6 +1,22 @@
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
+import type { StaticImageData } from "next/image";
+import moonFirstQuarter from "@/moon-phases/phase_first_quarter.png";
+import moonFull from "@/moon-phases/phase_full.png";
+import moonNew from "@/moon-phases/phase_new.png";
+import moonThirdQuarter from "@/moon-phases/phase_third_quarter.png";
+import moonWaningCrescent from "@/moon-phases/phase_waning_crescent.png";
+import moonWaningGibbous from "@/moon-phases/phase_waning_gibbous.png";
+import moonWaxingCrescent from "@/moon-phases/phase_waxing_crescent.png";
+import moonWaxingGibbous from "@/moon-phases/phase_waxing_gibbous.png";
 import { DISPLAY_CONFIG } from "@/lib/display-config";
+import {
+  decodeStravaConnection,
+  encodeStravaConnection,
+  getStravaRunSummary,
+  STRAVA_CONNECTION_COOKIE,
+} from "@/lib/strava";
+import type { StravaRunSummary } from "@/lib/strava";
 import { getWeatherSnapshot } from "@/lib/weather";
 import type { WeatherSnapshot } from "@/lib/weather";
 import {
@@ -47,6 +63,8 @@ type MetricData = {
 type TemperatureRangeData = {
   high: string | null;
   low: string | null;
+  highValue: number | null;
+  lowValue: number | null;
   highGraph: number;
   lowGraph: number;
 };
@@ -58,6 +76,12 @@ type MoonPhaseData = {
 
 const SYNODIC_MONTH_DAYS = 29.530588853;
 const KNOWN_NEW_MOON_UTC = Date.UTC(2000, 0, 6, 18, 14);
+const SIX_MONTHS_SECONDS = 60 * 60 * 24 * 180;
+const RAIN_DIAL_COLOR = "#2f9bff";
+const UV_DIAL_COLOR = "#ff3b30";
+const TEMPERATURE_DIAL_MIN = -6;
+const TEMPERATURE_DIAL_MAX = 30;
+const TEMPERATURE_DIAL_SWEEP = 356;
 
 const THEMES: Record<WallpaperTheme, ThemeTokens> = {
   dawn: {
@@ -134,21 +158,28 @@ export async function GET(request: NextRequest) {
   }
 
   const now = Date.now();
+  const nowDate = new Date(now);
   const moonPhase = getMoonPhase(now);
   const scale = width / 1179;
   const centerX = width / 2;
   const displayLift = height * 0.08;
   const moonCenterY = height * 0.515 - displayLift;
-  const sunMarkerY = moonCenterY + 18 * scale;
+  const sunMarkerTop = moonCenterY - 48 * scale;
   const moonFrameSize = 318 * scale;
   const moonDiskSize = 226 * scale;
+  const moonTextureUrl = new URL(getMoonPhaseImage(moonPhase.phase).src, request.nextUrl.origin).toString();
   const metricSize = 210 * scale;
   const metricGap = 45 * scale;
   const metricRowWidth = metricSize * 4 + metricGap * 3;
   const metricTop = height * 0.355 - displayLift;
+  const topIconRowTop = height * 0.116 - 40 * scale;
+  const topEdgeInset = width * 0.095;
   const yearProgress = formatYearProgress(now);
   const sunriseTime = DISPLAY_CONFIG.sections.sunrise ? formatTime12h(weather.sunrise) : null;
   const sunsetTime = DISPLAY_CONFIG.sections.sunset ? formatTime12h(weather.sunset) : null;
+  const stravaCookieValue = request.cookies.get(STRAVA_CONNECTION_COOKIE)?.value;
+  const stravaConnection = decodeStravaConnection(stravaCookieValue);
+  const stravaSummary = await safelyGetStravaRunSummary(nowDate, stravaConnection);
   const temperatureRange: TemperatureRangeData | null =
     DISPLAY_CONFIG.sections.weatherToday.high || DISPLAY_CONFIG.sections.weatherToday.low
       ? {
@@ -158,6 +189,8 @@ export async function GET(request: NextRequest) {
           low: DISPLAY_CONFIG.sections.weatherToday.low
             ? formatTemperature(weather.low, weather.temperatureUnitLabel)
             : null,
+          highValue: DISPLAY_CONFIG.sections.weatherToday.high ? weather.high : null,
+          lowValue: DISPLAY_CONFIG.sections.weatherToday.low ? weather.low : null,
           highGraph: normalizeTemperature(weather.high),
           lowGraph: normalizeTemperature(weather.low),
         }
@@ -194,6 +227,14 @@ export async function GET(request: NextRequest) {
   const rainMetric = weatherMetrics.find((metric) => metric.id === "rain");
   const windMetric = weatherMetrics.find((metric) => metric.id === "wind");
   const uvMetric = weatherMetrics.find((metric) => metric.id === "uv");
+  const headers: Record<string, string> = {
+    "cache-control": "private, no-store",
+  };
+  const updatedStravaCookie = stravaConnection ? encodeStravaConnection(stravaConnection) : null;
+
+  if (updatedStravaCookie && stravaCookieValue && updatedStravaCookie !== stravaCookieValue) {
+    headers["set-cookie"] = serializeStravaCookie(updatedStravaCookie, request.nextUrl.protocol === "https:");
+  }
 
   return new ImageResponse(
     (
@@ -211,7 +252,16 @@ export async function GET(request: NextRequest) {
       >
         <StarryBackdrop width={width} height={height} theme={theme} />
 
-        <YearProgress value={yearProgress} left={width * 0.115} top={height * 0.116} scale={scale} />
+        <CalendarProgress value={yearProgress} theme={theme} left={topEdgeInset} top={topIconRowTop} scale={scale} />
+
+        <RunningSummary
+          summary={stravaSummary}
+          theme={theme}
+          left={width - topEdgeInset - width * 0.135}
+          top={topIconRowTop}
+          width={width * 0.135}
+          scale={scale}
+        />
 
         {sunriseTime ? (
           <SunTimeMarker
@@ -219,7 +269,7 @@ export async function GET(request: NextRequest) {
             value={sunriseTime}
             theme={theme}
             left={width * 0.19 - 85 * scale}
-            top={sunMarkerY - 126 * scale}
+            top={sunMarkerTop}
             scale={scale}
           />
         ) : null}
@@ -229,7 +279,7 @@ export async function GET(request: NextRequest) {
             value={sunsetTime}
             theme={theme}
             left={width * 0.81 - 85 * scale}
-            top={sunMarkerY - 126 * scale}
+            top={sunMarkerTop}
             scale={scale}
           />
         ) : null}
@@ -246,7 +296,7 @@ export async function GET(request: NextRequest) {
             justifyContent: "center",
           }}
         >
-          <MoonPhase phase={moonPhase} size={moonDiskSize} />
+          <MoonPhase phase={moonPhase} imageUrl={moonTextureUrl} size={moonDiskSize} />
         </div>
 
         <div
@@ -270,15 +320,29 @@ export async function GET(request: NextRequest) {
     {
       width,
       height,
-      headers: {
-        "cache-control": "public, max-age=900, s-maxage=1800, stale-while-revalidate=3600",
-      },
+      headers,
     },
   );
 }
 
+function serializeStravaCookie(value: string, secure: boolean) {
+  return [
+    `${STRAVA_CONNECTION_COOKIE}=${value}`,
+    "Path=/",
+    `Max-Age=${SIX_MONTHS_SECONDS}`,
+    "HttpOnly",
+    "SameSite=Lax",
+    secure ? "Secure" : null,
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
 function StarryBackdrop({ width, height, theme }: { width: number; height: number; theme: ThemeTokens }) {
   const scale = width / 1179;
+  const tinyStars = Array.from({ length: 250 });
+  const brightStars = Array.from({ length: 34 });
+  const starTones = ["#f7f9ff", "#dbe8ff", "#fff4dd", "#e8f1ff"];
 
   return (
     <svg
@@ -287,34 +351,88 @@ function StarryBackdrop({ width, height, theme }: { width: number; height: numbe
       viewBox={`0 0 ${width} ${height}`}
       style={{ display: "block", position: "absolute", left: 0, top: 0 }}
     >
-      {Array.from({ length: 72 }).map((_, index) => {
-        const x = (((index * 113 + index * index * 31) % 1000) / 1000) * width;
-        const y = (((index * 167 + index * index * 19) % 1000) / 1000) * height;
-        const radius = (index % 29 === 0 ? 1.15 : index % 11 === 0 ? 0.9 : 0.62) * scale;
-        const opacity = 0.22 + ((index * 23) % 36) / 100;
+      <rect width={width} height={height} fill={theme.background} />
+      {tinyStars.map((_, index) => {
+        const x = hashUnit(index, 3) * width;
+        const y = hashUnit(index, 11) * height;
+        const radius = (0.28 + hashUnit(index, 19) * 0.42) * scale;
+        const opacity = 0.08 + hashUnit(index, 29) * 0.22;
 
         return (
           <circle
-            key={`backdrop-star-${index}`}
+            key={`backdrop-faint-star-${index}`}
             cx={x}
             cy={y}
             r={Math.max(0.45, radius)}
-            fill={index % 17 === 0 ? theme.starBright : theme.star}
+            fill={starTones[index % starTones.length]}
             opacity={opacity}
           />
+        );
+      })}
+      {brightStars.map((_, index) => {
+        const x = hashUnit(index, 41) * width;
+        const y = hashUnit(index, 47) * height;
+        const radius = (0.65 + hashUnit(index, 53) * 0.9) * scale;
+        const opacity = 0.22 + hashUnit(index, 59) * 0.34;
+
+        return (
+          <circle
+            key={`backdrop-bright-star-${index}`}
+            cx={x}
+            cy={y}
+            r={Math.max(0.55, radius)}
+            fill={index % 5 === 0 ? theme.starBright : starTones[(index + 1) % starTones.length]}
+            opacity={opacity}
+          />
+        );
+      })}
+      {Array.from({ length: 9 }).map((_, index) => {
+        const x = hashUnit(index, 67) * width;
+        const y = hashUnit(index, 71) * height;
+        const ray = (2.1 + hashUnit(index, 73) * 1.4) * scale;
+
+        return (
+          <g key={`backdrop-star-glint-${index}`} opacity={0.13 + hashUnit(index, 79) * 0.12}>
+            <line
+              x1={x}
+              y1={y - ray}
+              x2={x}
+              y2={y + ray}
+              stroke={theme.starBright}
+              strokeWidth={0.65 * scale}
+              strokeLinecap="round"
+            />
+            <line
+              x1={x - ray}
+              y1={y}
+              x2={x + ray}
+              y2={y}
+              stroke={theme.starBright}
+              strokeWidth={0.65 * scale}
+              strokeLinecap="round"
+            />
+          </g>
         );
       })}
     </svg>
   );
 }
 
-function YearProgress({
+function hashUnit(index: number, salt: number) {
+  const value = Math.sin(index * 127.1 + salt * 311.7) * 43758.5453123;
+
+  return value - Math.floor(value);
+}
+
+function CalendarProgress({
   value,
+  theme,
   left,
   top,
   scale,
 }: {
   value: string;
+  theme: ThemeTokens;
   left: number;
   top: number;
   scale: number;
@@ -326,15 +444,148 @@ function YearProgress({
         position: "absolute",
         left,
         top,
+        flexDirection: "column",
+        alignItems: "flex-start",
+        gap: 10 * scale,
         color: "#ffffff",
-        fontSize: 30 * scale,
-        fontWeight: 500,
-        lineHeight: 1,
-        letterSpacing: 0,
       }}
     >
-      {value}
+      <CalendarIcon theme={theme} size={28 * scale} />
+      <span
+        style={{
+          color: "#ffffff",
+          fontSize: 30 * scale,
+          fontWeight: 500,
+          lineHeight: 1,
+          letterSpacing: 0,
+        }}
+      >
+        {value}
+      </span>
     </div>
+  );
+}
+
+function RunningSummary({
+  summary,
+  theme,
+  left,
+  top,
+  width,
+  scale,
+}: {
+  summary: StravaRunSummary | null;
+  theme: ThemeTokens;
+  left: number;
+  top: number;
+  width: number;
+  scale: number;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        position: "absolute",
+        left,
+        top,
+        width,
+        flexDirection: "column",
+        alignItems: "flex-end",
+        gap: 9 * scale,
+        color: theme.ink,
+      }}
+    >
+      <RunningIcon theme={theme} size={40 * scale} />
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-end",
+          gap: 5 * scale,
+        }}
+      >
+        <span
+          style={{
+            color: "#ffffff",
+            fontSize: 24 * scale,
+            fontWeight: 500,
+            lineHeight: 1,
+            letterSpacing: 0,
+          }}
+        >
+          W {formatStravaDistance(summary?.lastWeekDistanceKm ?? null)}
+        </span>
+        <span
+          style={{
+            color: theme.muted,
+            fontSize: 21 * scale,
+            fontWeight: 400,
+            lineHeight: 1,
+            letterSpacing: 0,
+          }}
+        >
+          M {formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function CalendarIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M8 5 V10 M24 5 V10 M6 12 H26 M7 8 H25 C26.7 8 28 9.3 28 11 V25 C28 26.7 26.7 28 25 28 H7 C5.3 28 4 26.7 4 25 V11 C4 9.3 5.3 8 7 8 Z"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.9"
+      />
+      <path
+        d="M10 17 H12 M16 17 H18 M22 17 H24 M10 22 H12 M16 22 H18"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2"
+        strokeLinecap="round"
+        opacity="0.58"
+      />
+    </svg>
+  );
+}
+
+function RunningIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  const stridePath = [
+    "M28.5 15.5 C25 17.2 22.6 20.5 21.2 24.8 L28.8 29.2",
+    "M26.6 18.3 L18.8 20.2 L14 16.2",
+    "M27.5 18.8 L35.2 24.2 L41 22.8",
+    "M28.8 29.2 L37 32.2 L43.5 40.5 M43.5 40.5 L47 40.5",
+    "M26.6 28.2 L18.4 35.2 L10.5 35.2",
+  ].join(" ");
+
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" style={{ display: "block" }}>
+      <circle cx="31.5" cy="8" r="3.8" fill="none" stroke={theme.ink} strokeWidth="3" opacity="0.92" />
+      <path
+        d={stridePath}
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.9"
+      />
+      <path
+        d="M21.2 24.8 C24.2 25.6 26.6 27 28.8 29.2"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.5"
+      />
+    </svg>
   );
 }
 
@@ -394,10 +645,11 @@ function MetricDial({
 }) {
   const valueFontSize = metric.id === "wind" ? 35 * scale : 49 * scale;
   const hasSubValue = Boolean(metric.subValue);
+  const dialColor = getMetricDialColor(metric.id, theme);
 
   return (
     <div style={{ display: "flex", position: "relative", width: size, height: size }}>
-      <DialRings progress={metric.graph ?? 0.2} theme={theme} size={size} />
+      <DialRings progress={metric.graph ?? 0.2} theme={theme} size={size} accent={dialColor} />
       <div
         style={{
           display: "flex",
@@ -474,11 +726,15 @@ function TemperatureDial({
   size: number;
   scale: number;
 }) {
-  const progress = (range.highGraph + range.lowGraph) / 2;
+  const highColor = temperatureColor(range.highGraph);
+  const lowColor = temperatureColor(range.lowGraph);
+  const labelFontSize = size * 0.067;
+  const labelTop = size * 0.858;
+  const labelWidth = size * 0.16;
 
   return (
     <div style={{ display: "flex", position: "relative", width: size, height: size }}>
-      <DialRings progress={progress} theme={theme} size={size} />
+      <TemperatureDialRings range={range} theme={theme} size={size} />
       <div
         style={{
           display: "flex",
@@ -501,26 +757,206 @@ function TemperatureDial({
           top: size * 0.42,
           flexDirection: "column",
           alignItems: "center",
-          gap: 5 * scale,
+          gap: 7 * scale,
         }}
       >
-        <span style={{ color: theme.ink, fontSize: 47 * scale, fontWeight: 500, lineHeight: 0.95 }}>
+        <span style={{ color: highColor, fontSize: 45 * scale, fontWeight: 500, lineHeight: 0.95 }}>
           {range.high ?? "--"}
         </span>
-        <span style={{ color: theme.ink, fontSize: 32 * scale, fontWeight: 400, lineHeight: 0.95 }}>
+        <span style={{ color: lowColor, fontSize: 31 * scale, fontWeight: 400, lineHeight: 0.95 }}>
           {range.low ?? "--"}
+        </span>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          position: "absolute",
+          left: size * 0.38 - labelWidth,
+          top: labelTop,
+          width: labelWidth,
+          justifyContent: "flex-end",
+        }}
+      >
+        <span
+          style={{
+            color: theme.muted,
+            fontSize: labelFontSize,
+            fontWeight: 400,
+            lineHeight: 1,
+            opacity: 0.62,
+          }}
+        >
+          {TEMPERATURE_DIAL_MIN}
+        </span>
+      </div>
+      <div
+        style={{
+          display: "flex",
+          position: "absolute",
+          left: size * 0.62,
+          top: labelTop,
+          width: labelWidth,
+          justifyContent: "flex-start",
+        }}
+      >
+        <span
+          style={{
+            color: theme.muted,
+            fontSize: labelFontSize,
+            fontWeight: 400,
+            lineHeight: 1,
+            opacity: 0.62,
+          }}
+        >
+          {TEMPERATURE_DIAL_MAX}
         </span>
       </div>
     </div>
   );
 }
 
-function DialRings({ progress, theme, size }: { progress: number; theme: ThemeTokens; size: number }) {
+function TemperatureDialRings({ range, theme, size }: { range: TemperatureRangeData; theme: ThemeTokens; size: number }) {
   const center = size / 2;
   const shellRadius = size * 0.47;
   const radius = size * 0.425;
   const innerRadius = size * 0.36;
-  const arcEnd = -92 + Math.max(26, Math.min(286, progress * 286));
+  const arcStart = 90;
+  const segmentCount = 40;
+  const hasHigh = range.highValue !== null;
+  const hasLow = range.lowValue !== null;
+  const activeStart = Math.min(hasLow ? range.lowGraph : range.highGraph, hasHigh ? range.highGraph : range.lowGraph);
+  const activeEnd = Math.max(hasLow ? range.lowGraph : range.highGraph, hasHigh ? range.highGraph : range.lowGraph);
+  const highAngle = arcStart + range.highGraph * TEMPERATURE_DIAL_SWEEP;
+  const lowAngle = arcStart + range.lowGraph * TEMPERATURE_DIAL_SWEEP;
+  const highPoint = polarPoint(center, center, radius, highAngle);
+  const lowPoint = polarPoint(center, center, radius, lowAngle);
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ display: "block", position: "absolute" }}>
+      <circle
+        cx={center}
+        cy={center}
+        r={shellRadius}
+        fill="rgba(0, 0, 0, 0.3)"
+        stroke={theme.accent}
+        strokeOpacity="0.34"
+        strokeWidth={1.4}
+      />
+      <circle cx={center} cy={center} r={radius} fill="none" stroke={theme.line} strokeOpacity="0.42" />
+      <circle cx={center} cy={center} r={innerRadius} fill="none" stroke={theme.line} strokeOpacity="0.24" />
+      {Array.from({ length: segmentCount }).map((_, index) => {
+        const startRatio = index / segmentCount;
+        const endRatio = Math.min(1, (index + 0.74) / segmentCount);
+        const midRatio = (startRatio + endRatio) / 2;
+        const active = (hasHigh || hasLow) && midRatio >= activeStart && midRatio <= activeEnd;
+
+        return (
+          <path
+            key={`temperature-spectrum-${index}`}
+            d={arcPath(
+              center,
+              center,
+              radius,
+              arcStart + startRatio * TEMPERATURE_DIAL_SWEEP,
+              arcStart + endRatio * TEMPERATURE_DIAL_SWEEP,
+            )}
+            fill="none"
+            stroke={temperatureColor(midRatio)}
+            strokeWidth={active ? 4.4 : 2.4}
+            strokeLinecap="round"
+            strokeOpacity={active ? 0.96 : 0.24}
+          />
+        );
+      })}
+      {hasLow ? (
+        <circle
+          cx={lowPoint.x}
+          cy={lowPoint.y}
+          r={4.1}
+          fill={temperatureColor(range.lowGraph)}
+          stroke="#ffffff"
+          strokeOpacity="0.76"
+          strokeWidth={1.1}
+        />
+      ) : null}
+      {hasHigh ? (
+        <circle
+          cx={highPoint.x}
+          cy={highPoint.y}
+          r={4.7}
+          fill={temperatureColor(range.highGraph)}
+          stroke="#ffffff"
+          strokeOpacity="0.82"
+          strokeWidth={1.2}
+        />
+      ) : null}
+      <circle cx={center} cy={center} r={size * 0.495} fill="none" stroke={theme.line} strokeOpacity="0.2" />
+    </svg>
+  );
+}
+
+function temperatureColor(progress: number) {
+  if (progress < 0.25) {
+    return interpolateHex("#4da3ff", "#35d7ff", progress / 0.25);
+  }
+
+  if (progress < 0.5) {
+    return interpolateHex("#35d7ff", "#ffd166", (progress - 0.25) / 0.25);
+  }
+
+  if (progress < 0.75) {
+    return interpolateHex("#ffd166", "#ff9f0a", (progress - 0.5) / 0.25);
+  }
+
+  return interpolateHex("#ff9f0a", "#ff453a", (progress - 0.75) / 0.25);
+}
+
+function interpolateHex(start: string, end: string, amount: number) {
+  const ratio = Math.min(1, Math.max(0, amount));
+  const startColor = hexToRgb(start);
+  const endColor = hexToRgb(end);
+  const channel = (from: number, to: number) => Math.round(from + (to - from) * ratio);
+
+  return `rgb(${channel(startColor.r, endColor.r)}, ${channel(startColor.g, endColor.g)}, ${channel(startColor.b, endColor.b)})`;
+}
+
+function hexToRgb(hex: string) {
+  return {
+    r: Number.parseInt(hex.slice(1, 3), 16),
+    g: Number.parseInt(hex.slice(3, 5), 16),
+    b: Number.parseInt(hex.slice(5, 7), 16),
+  };
+}
+
+function getMetricDialColor(id: string, theme: ThemeTokens) {
+  if (id === "rain") {
+    return RAIN_DIAL_COLOR;
+  }
+
+  if (id === "uv") {
+    return UV_DIAL_COLOR;
+  }
+
+  return theme.accent;
+}
+
+function DialRings({
+  progress,
+  theme,
+  size,
+  accent,
+}: {
+  progress: number;
+  theme: ThemeTokens;
+  size: number;
+  accent: string;
+}) {
+  const center = size / 2;
+  const shellRadius = size * 0.47;
+  const radius = size * 0.425;
+  const innerRadius = size * 0.36;
+  const arcStart = 90;
+  const arcEnd = arcStart + Math.max(26, Math.min(286, progress * 286));
   const end = polarPoint(center, center, radius, arcEnd);
 
   return (
@@ -537,14 +973,14 @@ function DialRings({ progress, theme, size }: { progress: number; theme: ThemeTo
       <circle cx={center} cy={center} r={radius} fill="none" stroke={theme.line} strokeOpacity="0.58" />
       <circle cx={center} cy={center} r={innerRadius} fill="none" stroke={theme.line} strokeOpacity="0.24" />
       <path
-        d={arcPath(center, center, radius, -92, arcEnd)}
+        d={arcPath(center, center, radius, arcStart, arcEnd)}
         fill="none"
-        stroke={theme.accent}
+        stroke={accent}
         strokeWidth={3.4}
         strokeLinecap="round"
         strokeOpacity="0.9"
       />
-      <circle cx={end.x} cy={end.y} r={3.3} fill={theme.ink} opacity="0.85" />
+      <circle cx={end.x} cy={end.y} r={3.3} fill={accent} opacity="0.95" />
       <circle cx={center} cy={center} r={size * 0.495} fill="none" stroke={theme.line} strokeOpacity="0.2" />
     </svg>
   );
@@ -621,8 +1057,8 @@ function LineIcon({ icon, theme, size }: { icon: MetricIconName; theme: ThemeTok
     const arc = icon === "sunrise" ? "M20 35 A12 12 0 0 1 44 35" : "M20 29 A12 12 0 0 0 44 29";
     const horizon = icon === "sunrise" ? 35 : 29;
     const rays = icon === "sunrise"
-      ? "M32 10 V16 M15 22 L20 26 M49 22 L44 26 M10 35 H16 M48 35 H54"
-      : "M32 48 V54 M15 42 L20 38 M49 42 L44 38 M10 29 H16 M48 29 H54";
+      ? "M32 10 V23 M15 22 L20 26 M49 22 L44 26 M10 35 H16 M48 35 H54"
+      : "M32 41 V54 M15 42 L20 38 M49 42 L44 38 M10 29 H16 M48 29 H54";
 
     return (
       <svg width={size} height={size} viewBox="0 0 64 64" style={{ display: "block" }}>
@@ -648,7 +1084,7 @@ function LineIcon({ icon, theme, size }: { icon: MetricIconName; theme: ThemeTok
 }
 
 function normalizeTemperature(value: number | null) {
-  return normalizeRatio(value, -10, 38);
+  return normalizeRatio(value, TEMPERATURE_DIAL_MIN, TEMPERATURE_DIAL_MAX);
 }
 
 function normalizePercent(value: number | null) {
@@ -669,6 +1105,14 @@ function normalizeRatio(value: number | null, min: number, max: number) {
   }
 
   return Math.min(1, Math.max(0, (value - min) / (max - min)));
+}
+
+async function safelyGetStravaRunSummary(now: Date, stravaConnection: ReturnType<typeof decodeStravaConnection>) {
+  try {
+    return await getStravaRunSummary(now, stravaConnection);
+  } catch {
+    return null;
+  }
 }
 
 function formatOptionalTime12h(value: string | null) {
@@ -695,6 +1139,18 @@ function formatYearProgress(timestamp: number) {
   const progress = ((timestamp - yearStart) / (nextYearStart - yearStart)) * 100;
 
   return `${Math.max(0, Math.min(100, progress)).toFixed(1)}%`;
+}
+
+function formatStravaDistance(value: number | null) {
+  if (value === null) {
+    return "-- km";
+  }
+
+  if (value >= 100) {
+    return `${Math.round(value)} km`;
+  }
+
+  return `${value.toFixed(1)} km`;
 }
 
 function formatTime12h(value: string | null) {
@@ -770,24 +1226,43 @@ function positiveModulo(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
-function MoonPhase({ phase, size }: { phase: MoonPhaseData; size: number }) {
+function getMoonPhaseImage(phase: number): StaticImageData {
+  const normalized = positiveModulo(phase, 1);
+
+  if (normalized < 1 / 16 || normalized >= 15 / 16) {
+    return moonNew;
+  }
+
+  if (normalized < 3 / 16) {
+    return moonWaxingCrescent;
+  }
+
+  if (normalized < 5 / 16) {
+    return moonFirstQuarter;
+  }
+
+  if (normalized < 7 / 16) {
+    return moonWaxingGibbous;
+  }
+
+  if (normalized < 9 / 16) {
+    return moonFull;
+  }
+
+  if (normalized < 11 / 16) {
+    return moonWaningGibbous;
+  }
+
+  if (normalized < 13 / 16) {
+    return moonThirdQuarter;
+  }
+
+  return moonWaningCrescent;
+}
+
+function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: string; size: number }) {
   const frameSize = size + 92;
-  const center = 50;
-  const radius = (size / frameSize) * 50;
-  const terminatorRadius = Math.max(0.1, radius * Math.abs(Math.cos(2 * Math.PI * phase.phase)));
-  const rightPath = moonSegmentPath(center, radius, terminatorRadius, "right");
-  const leftPath = moonSegmentPath(center, radius, terminatorRadius, "left");
-  const craters = [
-    { cx: 61, cy: 33, r: 6.5, opacity: 0.16 },
-    { cx: 69, cy: 48, r: 4.8, opacity: 0.14 },
-    { cx: 56, cy: 62, r: 5.8, opacity: 0.12 },
-    { cx: 73, cy: 65, r: 3.4, opacity: 0.12 },
-    { cx: 45, cy: 38, r: 3.2, opacity: 0.08 },
-    { cx: 65, cy: 24, r: 2.4, opacity: 0.13 },
-    { cx: 49, cy: 74, r: 2.7, opacity: 0.1 },
-  ];
-  const shadow = "#050607";
-  const moonElements = getMoonPhaseElements(phase.phase, phase.illumination, rightPath, leftPath);
+  const illumination = Math.round(phase.illumination * 100);
 
   return (
     <div
@@ -800,116 +1275,34 @@ function MoonPhase({ phase, size }: { phase: MoonPhaseData; size: number }) {
         borderRadius: 999,
       }}
     >
-      <svg width={frameSize} height={frameSize} viewBox="0 0 100 100" style={{ display: "block" }}>
-        <defs>
-          <radialGradient id="moonLight" cx="70%" cy="30%" r="78%">
-            <stop offset="0%" stopColor="#ffffff" />
-            <stop offset="42%" stopColor="#d8d8d8" />
-            <stop offset="78%" stopColor="#a3a3a3" />
-            <stop offset="100%" stopColor="#626262" />
-          </radialGradient>
-          <radialGradient id="moonShadow" cx="46%" cy="46%" r="64%">
-            <stop offset="0%" stopColor="#08090a" />
-            <stop offset="100%" stopColor="#000000" />
-          </radialGradient>
-          <clipPath id="moonClip">
-            <circle cx={center} cy={center} r={radius} />
-          </clipPath>
-        </defs>
-        <g clipPath="url(#moonClip)">
-          <circle cx={center} cy={center} r={radius} fill="url(#moonShadow)" />
-          {moonElements.lightCircle ? (
-            <circle cx={center} cy={center} r={radius} fill="url(#moonLight)" opacity="0.98" />
-          ) : null}
-          {moonElements.lightPath ? <path d={moonElements.lightPath} fill="url(#moonLight)" opacity="0.98" /> : null}
-          {moonElements.shadowPath ? <path d={moonElements.shadowPath} fill={shadow} opacity="0.97" /> : null}
-          <circle cx="71" cy="36" r="20" fill="#f4f4f4" opacity="0.08" />
-          {craters.map((crater, index) => (
-            <circle
-              key={`moon-crater-${index}`}
-              cx={crater.cx}
-              cy={crater.cy}
-              r={crater.r}
-              fill="#202020"
-              opacity={crater.opacity + phase.illumination * 0.04}
-            />
-          ))}
-          {craters.map((crater, index) => (
-            <circle
-              key={`moon-crater-rim-${index}`}
-              cx={crater.cx - 0.8}
-              cy={crater.cy - 0.8}
-              r={crater.r}
-              fill="none"
-              stroke="#eeeeee"
-              strokeOpacity={0.05 + phase.illumination * 0.04}
-              strokeWidth="0.6"
-            />
-          ))}
-        </g>
-      </svg>
+      <div
+        style={{
+          display: "flex",
+          width: size,
+          height: size,
+          overflow: "hidden",
+          borderRadius: 999,
+          background: "#000000",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        <img
+          alt={`Moon phase ${illumination}% illuminated`}
+          src={imageUrl}
+          width={size}
+          height={size}
+          style={{
+            display: "block",
+            width: size,
+            height: size,
+            objectFit: "cover",
+            borderRadius: 999,
+          }}
+        />
+      </div>
     </div>
   );
-}
-
-function getMoonPhaseElements(phase: number, illumination: number, rightPath: string, leftPath: string) {
-  if (illumination < 0.015) {
-    return {
-      lightCircle: false,
-      lightPath: null,
-      shadowPath: null,
-    };
-  }
-
-  if (illumination > 0.985) {
-    return {
-      lightCircle: true,
-      lightPath: null,
-      shadowPath: null,
-    };
-  }
-
-  if (phase < 0.25) {
-    return {
-      lightCircle: false,
-      lightPath: rightPath,
-      shadowPath: null,
-    };
-  }
-
-  if (phase < 0.5) {
-    return {
-      lightCircle: true,
-      lightPath: null,
-      shadowPath: leftPath,
-    };
-  }
-
-  if (phase < 0.75) {
-    return {
-      lightCircle: true,
-      lightPath: null,
-      shadowPath: rightPath,
-    };
-  }
-
-  return {
-    lightCircle: false,
-    lightPath: leftPath,
-    shadowPath: null,
-  };
-}
-
-function moonSegmentPath(center: number, radius: number, terminatorRadius: number, side: "left" | "right") {
-  const outerSweep = side === "right" ? 1 : 0;
-  const innerSweep = side === "right" ? 0 : 1;
-
-  return [
-    `M ${center} ${center - radius}`,
-    `A ${radius} ${radius} 0 0 ${outerSweep} ${center} ${center + radius}`,
-    `A ${terminatorRadius} ${radius} 0 0 ${innerSweep} ${center} ${center - radius}`,
-    "Z",
-  ].join(" ");
 }
 
 function polarPoint(cx: number, cy: number, radius: number, angle: number) {
