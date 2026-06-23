@@ -1,7 +1,7 @@
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
 import { DISPLAY_CONFIG } from "@/lib/display-config";
-import { getWeatherSnapshot, weatherCodeLabel } from "@/lib/weather";
+import { getWeatherSnapshot } from "@/lib/weather";
 import type { WeatherSnapshot } from "@/lib/weather";
 import {
   DEFAULT_LOCATION,
@@ -61,34 +61,34 @@ const KNOWN_NEW_MOON_UTC = Date.UTC(2000, 0, 6, 18, 14);
 
 const THEMES: Record<WallpaperTheme, ThemeTokens> = {
   dawn: {
-    background: "linear-gradient(180deg, #000000 0%, #030405 52%, #000000 100%)",
+    background: "#000000",
     ink: "#f4f4f4",
     muted: "#9f9f9f",
     panel: "rgba(20, 18, 22, 0.64)",
     accent: "#c0c0c0",
     line: "rgba(192, 192, 192, 0.2)",
-    star: "rgba(210, 210, 210, 0.62)",
-    starBright: "rgba(255, 255, 255, 0.92)",
+    star: "rgba(255, 255, 255, 0.62)",
+    starBright: "rgba(255, 255, 255, 0.94)",
   },
   garden: {
-    background: "linear-gradient(180deg, #000000 0%, #030506 52%, #000000 100%)",
+    background: "#000000",
     ink: "#f4f4f4",
     muted: "#9f9f9f",
     panel: "rgba(16, 22, 20, 0.64)",
     accent: "#c0c0c0",
     line: "rgba(192, 192, 192, 0.19)",
-    star: "rgba(210, 210, 210, 0.6)",
-    starBright: "rgba(255, 255, 255, 0.92)",
+    star: "rgba(255, 255, 255, 0.6)",
+    starBright: "rgba(255, 255, 255, 0.94)",
   },
   night: {
-    background: "linear-gradient(180deg, #000000 0%, #020202 52%, #000000 100%)",
+    background: "#000000",
     ink: "#f4f4f4",
     muted: "#9f9f9f",
     panel: "rgba(17, 15, 20, 0.64)",
     accent: "#c0c0c0",
     line: "rgba(192, 192, 192, 0.2)",
-    star: "rgba(210, 210, 210, 0.58)",
-    starBright: "rgba(255, 255, 255, 0.92)",
+    star: "rgba(255, 255, 255, 0.58)",
+    starBright: "rgba(255, 255, 255, 0.94)",
   },
 };
 
@@ -133,24 +133,20 @@ export async function GET(request: NextRequest) {
     };
   }
 
-  const date = formatDate(weather.date).toUpperCase();
-  const condition = weatherCodeLabel(weather.currentWeatherCode ?? weather.weatherCode);
-  const currentWeatherIcon = getWeatherIcon(condition);
-  const moonPhase = getMoonPhase(Date.now());
+  const now = Date.now();
+  const moonPhase = getMoonPhase(now);
   const scale = width / 1179;
   const centerX = width / 2;
-  const moonCenterY = height * 0.515;
-  const horizonY = moonCenterY + 18 * scale;
-  const dateTop = height * 0.33;
-  const capsuleWidth = 310 * scale;
-  const capsuleHeight = 122 * scale;
-  const capsuleTop = dateTop + 78 * scale;
+  const displayLift = height * 0.08;
+  const moonCenterY = height * 0.515 - displayLift;
+  const sunMarkerY = moonCenterY + 18 * scale;
   const moonFrameSize = 318 * scale;
   const moonDiskSize = 226 * scale;
   const metricSize = 210 * scale;
   const metricGap = 45 * scale;
   const metricRowWidth = metricSize * 4 + metricGap * 3;
-  const metricTop = height * 0.625;
+  const metricTop = height * 0.355 - displayLift;
+  const yearProgress = formatYearProgress(now);
   const sunriseTime = DISPLAY_CONFIG.sections.sunrise ? formatTime12h(weather.sunrise) : null;
   const sunsetTime = DISPLAY_CONFIG.sections.sunset ? formatTime12h(weather.sunset) : null;
   const temperatureRange: TemperatureRangeData | null =
@@ -173,7 +169,7 @@ export async function GET(request: NextRequest) {
           value: formatPercent(weather.rainChance),
           icon: "rain",
           graph: normalizePercent(weather.rainChance),
-          subValue: formatOptionalTime12h(weather.rainPeakTime),
+          subValue: formatRainPeakTime(weather.rainChance, weather.rainPeakTime),
         }
       : null,
     DISPLAY_CONFIG.sections.weatherToday.windMax
@@ -213,90 +209,9 @@ export async function GET(request: NextRequest) {
           fontFamily: "Helvetica Neue, Arial, Helvetica, sans-serif",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            position: "absolute",
-            left: centerX - width * 0.49,
-            top: moonCenterY - width * 0.46,
-            width: width * 0.98,
-            height: width * 0.92,
-            borderRadius: 9999,
-            background: "rgba(192, 192, 192, 0.034)",
-          }}
-        />
-        <div
-          style={{
-            display: "flex",
-            position: "absolute",
-            left: width * 0.6,
-            top: height * 0.34,
-            width: width * 0.32,
-            height: width * 0.32,
-            borderRadius: 9999,
-            background: "rgba(192, 192, 192, 0.026)",
-          }}
-        />
-        {Array.from({ length: 245 }).map((_, index) => (
-          <Star key={`star-${index}`} index={index} theme={theme} />
-        ))}
-        {Array.from({ length: 250 }).map((_, index) => (
-          <CosmicDust key={`dust-${index}`} index={index} width={width} height={height} theme={theme} />
-        ))}
-        <OrbitalFrame
-          width={width}
-          height={height}
-          centerX={centerX}
-          moonCenterY={moonCenterY}
-          horizonY={horizonY}
-          theme={theme}
-        />
-        <div
-          style={{
-            display: "flex",
-            position: "absolute",
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: height * 0.24,
-            background: "linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0.62) 100%)",
-          }}
-        />
+        <StarryBackdrop width={width} height={height} theme={theme} />
 
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            position: "absolute",
-            left: 0,
-            right: 0,
-            top: dateTop,
-            alignItems: "center",
-          }}
-        >
-          <span
-            style={{
-              color: theme.accent,
-              fontSize: 29 * scale,
-              fontWeight: 500,
-              lineHeight: 1,
-              textTransform: "uppercase",
-            }}
-          >
-            {date}
-          </span>
-        </div>
-
-        <WeatherCapsule
-          icon={currentWeatherIcon}
-          range={temperatureRange}
-          theme={theme}
-          left={centerX - capsuleWidth / 2}
-          top={capsuleTop}
-          width={capsuleWidth}
-          height={capsuleHeight}
-          scale={scale}
-        />
+        <YearProgress value={yearProgress} left={width * 0.115} top={height * 0.116} scale={scale} />
 
         {sunriseTime ? (
           <SunTimeMarker
@@ -304,7 +219,7 @@ export async function GET(request: NextRequest) {
             value={sunriseTime}
             theme={theme}
             left={width * 0.19 - 85 * scale}
-            top={horizonY - 126 * scale}
+            top={sunMarkerY - 126 * scale}
             scale={scale}
           />
         ) : null}
@@ -314,7 +229,7 @@ export async function GET(request: NextRequest) {
             value={sunsetTime}
             theme={theme}
             left={width * 0.81 - 85 * scale}
-            top={horizonY - 126 * scale}
+            top={sunMarkerY - 126 * scale}
             scale={scale}
           />
         ) : null}
@@ -331,7 +246,7 @@ export async function GET(request: NextRequest) {
             justifyContent: "center",
           }}
         >
-          <MoonPhase phase={moonPhase} theme={theme} size={moonDiskSize} />
+          <MoonPhase phase={moonPhase} size={moonDiskSize} />
         </div>
 
         <div
@@ -362,136 +277,8 @@ export async function GET(request: NextRequest) {
   );
 }
 
-function Star({ index, theme }: { index: number; theme: ThemeTokens }) {
-  const left = ((index * 47 + index * index * 13) % 1000) / 10;
-  const top = ((index * 83 + index * index * 7) % 980) / 10;
-  const size = index % 41 === 0 ? 4 : index % 19 === 0 ? 3 : index % 7 === 0 ? 2 : 1;
-  const opacity = 0.14 + ((index * 17) % 62) / 100;
-  const isTwinkle = index % 53 === 0;
-
-  if (isTwinkle) {
-    return (
-      <div
-        style={{
-          display: "flex",
-          position: "absolute",
-          left: `${left}%`,
-          top: `${top}%`,
-          width: size * 3,
-          height: size * 3,
-          opacity,
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            position: "absolute",
-            left: size * 1.5 - 0.5,
-            top: 0,
-            width: 1,
-            height: size * 3,
-            borderRadius: 999,
-            background: theme.starBright,
-          }}
-        />
-        <div
-          style={{
-            display: "flex",
-            position: "absolute",
-            left: 0,
-            top: size * 1.5 - 0.5,
-            width: size * 3,
-            height: 1,
-            borderRadius: 999,
-            background: theme.starBright,
-          }}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        position: "absolute",
-        left: `${left}%`,
-        top: `${top}%`,
-        width: size,
-        height: size,
-        borderRadius: "999px",
-        background: theme.star,
-        opacity,
-      }}
-    />
-  );
-}
-
-function CosmicDust({
-  index,
-  width,
-  height,
-  theme,
-}: {
-  index: number;
-  width: number;
-  height: number;
-  theme: ThemeTokens;
-}) {
+function StarryBackdrop({ width, height, theme }: { width: number; height: number; theme: ThemeTokens }) {
   const scale = width / 1179;
-  const strandIndex = index % 150;
-  const t = strandIndex / 149;
-  const jitterX = (((index * 29) % 100) - 50) / 100;
-  const jitterY = (((index * 43) % 100) - 50) / 100;
-  const isRightCluster = index >= 150;
-  const left = isRightCluster
-    ? width * (0.72 + jitterX * 0.16)
-    : width * (0.1 + t * 0.78 + jitterX * 0.075);
-  const top = isRightCluster
-    ? height * (0.385 + jitterY * 0.105)
-    : height * (0.63 - t * 0.28 + jitterY * 0.085);
-  const size = (index % 31 === 0 ? 4 : index % 11 === 0 ? 2 : 1) * scale;
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        position: "absolute",
-        left,
-        top,
-        width: Math.max(1, size),
-        height: Math.max(1, size),
-        borderRadius: 999,
-        background: index % 9 === 0 ? theme.starBright : theme.accent,
-        opacity: isRightCluster ? 0.16 + ((index * 7) % 42) / 100 : 0.1 + ((index * 5) % 34) / 100,
-      }}
-    />
-  );
-}
-
-function OrbitalFrame({
-  width,
-  height,
-  centerX,
-  moonCenterY,
-  horizonY,
-  theme,
-}: {
-  width: number;
-  height: number;
-  centerX: number;
-  moonCenterY: number;
-  horizonY: number;
-  theme: ThemeTokens;
-}) {
-  const outerRadius = width * 0.47;
-  const midRadius = width * 0.32;
-  const innerRadius = width * 0.17;
-  const tickInner = width * 0.123;
-  const tickOuter = width * 0.133;
-  const sunriseX = width * 0.19;
-  const sunsetX = width * 0.81;
-  const horizonPath = `M ${width * 0.08} ${horizonY + width * 0.018} Q ${centerX} ${horizonY - width * 0.012} ${width * 0.92} ${horizonY + width * 0.018}`;
 
   return (
     <svg
@@ -500,48 +287,20 @@ function OrbitalFrame({
       viewBox={`0 0 ${width} ${height}`}
       style={{ display: "block", position: "absolute", left: 0, top: 0 }}
     >
-      <circle cx={centerX} cy={moonCenterY} r={outerRadius} fill="none" stroke={theme.line} strokeOpacity="0.35" />
-      <circle cx={centerX} cy={moonCenterY} r={midRadius} fill="none" stroke={theme.line} strokeOpacity="0.26" />
-      <circle cx={centerX} cy={moonCenterY} r={innerRadius} fill="none" stroke={theme.line} strokeOpacity="0.24" />
-      <circle
-        cx={centerX}
-        cy={moonCenterY}
-        r={width * 0.145}
-        fill="none"
-        stroke={theme.accent}
-        strokeOpacity="0.56"
-        strokeWidth={1.1}
-      />
-      <line
-        x1={centerX}
-        y1={height * 0.29}
-        x2={centerX}
-        y2={height * 0.74}
-        stroke={theme.accent}
-        strokeOpacity="0.28"
-        strokeWidth={1}
-        strokeDasharray="2 9"
-      />
-      <path d={horizonPath} fill="none" stroke={theme.accent} strokeOpacity="0.58" strokeWidth={1.2} />
-      <circle cx={sunriseX} cy={horizonY} r={4.8} fill={theme.ink} opacity="0.95" />
-      <circle cx={sunriseX} cy={horizonY} r={9} fill="none" stroke={theme.accent} strokeOpacity="0.24" />
-      <circle cx={sunsetX} cy={horizonY} r={4.8} fill={theme.ink} opacity="0.95" />
-      <circle cx={sunsetX} cy={horizonY} r={9} fill="none" stroke={theme.accent} strokeOpacity="0.24" />
-      {Array.from({ length: 96 }).map((_, index) => {
-        const angle = (index / 96) * 360;
-        const start = polarPoint(centerX, moonCenterY, index % 4 === 0 ? tickInner - width * 0.006 : tickInner, angle);
-        const end = polarPoint(centerX, moonCenterY, tickOuter, angle);
+      {Array.from({ length: 72 }).map((_, index) => {
+        const x = (((index * 113 + index * index * 31) % 1000) / 1000) * width;
+        const y = (((index * 167 + index * index * 19) % 1000) / 1000) * height;
+        const radius = (index % 29 === 0 ? 1.15 : index % 11 === 0 ? 0.9 : 0.62) * scale;
+        const opacity = 0.22 + ((index * 23) % 36) / 100;
 
         return (
-          <line
-            key={`moon-tick-${index}`}
-            x1={start.x}
-            y1={start.y}
-            x2={end.x}
-            y2={end.y}
-            stroke={theme.accent}
-            strokeOpacity={index % 4 === 0 ? 0.52 : 0.24}
-            strokeWidth={index % 4 === 0 ? 1.1 : 0.8}
+          <circle
+            key={`backdrop-star-${index}`}
+            cx={x}
+            cy={y}
+            r={Math.max(0.45, radius)}
+            fill={index % 17 === 0 ? theme.starBright : theme.star}
+            opacity={opacity}
           />
         );
       })}
@@ -549,28 +308,17 @@ function OrbitalFrame({
   );
 }
 
-function WeatherCapsule({
-  icon,
-  range,
-  theme,
+function YearProgress({
+  value,
   left,
   top,
-  width,
-  height,
   scale,
 }: {
-  icon: MetricIconName;
-  range: TemperatureRangeData | null;
-  theme: ThemeTokens;
+  value: string;
   left: number;
   top: number;
-  width: number;
-  height: number;
   scale: number;
 }) {
-  const highValue = range?.high ?? range?.low ?? "--";
-  const lowValue = range?.low ?? "--";
-
   return (
     <div
       style={{
@@ -578,25 +326,14 @@ function WeatherCapsule({
         position: "absolute",
         left,
         top,
-        width,
-        height,
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 34 * scale,
-        borderRadius: 999,
-        border: `1.4px solid ${theme.accent}`,
-        background: "rgba(5, 5, 5, 0.48)",
+        color: "#ffffff",
+        fontSize: 30 * scale,
+        fontWeight: 500,
+        lineHeight: 1,
+        letterSpacing: 0,
       }}
     >
-      <LineIcon icon={icon === "rain" ? "cloud" : icon} theme={theme} size={63 * scale} />
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 * scale }}>
-        <span style={{ fontSize: 40 * scale, fontWeight: 500, lineHeight: 0.95 }}>{highValue}</span>
-        <span style={{ color: theme.ink, fontSize: 28 * scale, fontWeight: 300, lineHeight: 0.95 }}>{lowValue}</span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 16 * scale, color: theme.accent }}>
-        <span style={{ fontSize: 27 * scale, lineHeight: 0.8 }}>↑</span>
-        <span style={{ color: theme.muted, fontSize: 27 * scale, lineHeight: 0.8 }}>↓</span>
-      </div>
+      {value}
     </div>
   );
 }
@@ -655,7 +392,7 @@ function MetricDial({
   size: number;
   scale: number;
 }) {
-  const valueFontSize = metric.id === "wind" ? 31 * scale : 42 * scale;
+  const valueFontSize = metric.id === "wind" ? 35 * scale : 49 * scale;
   const hasSubValue = Boolean(metric.subValue);
 
   return (
@@ -667,11 +404,12 @@ function MetricDial({
           position: "absolute",
           left: 0,
           right: 0,
-          top: size * 0.25,
+          top: size * 0.18,
           justifyContent: "center",
+          opacity: 0.82,
         }}
       >
-        <LineIcon icon={metric.icon} theme={theme} size={54 * scale} />
+        <LineIcon icon={metric.icon} theme={theme} size={42 * scale} />
       </div>
       <div
         style={{
@@ -679,11 +417,11 @@ function MetricDial({
           position: "absolute",
           left: 0,
           right: 0,
-          top: hasSubValue ? size * 0.57 : size * 0.63,
+          top: hasSubValue ? size * 0.49 : size * 0.54,
           justifyContent: "center",
         }}
       >
-        <span style={{ color: theme.ink, fontSize: valueFontSize, fontWeight: 300, lineHeight: 1 }}>
+        <span style={{ color: theme.ink, fontSize: valueFontSize, fontWeight: 500, lineHeight: 0.95 }}>
           {metric.value}
         </span>
       </div>
@@ -694,14 +432,14 @@ function MetricDial({
             position: "absolute",
             left: 0,
             right: 0,
-            top: size * 0.77,
+            top: size * 0.76,
             alignItems: "center",
             justifyContent: "center",
             gap: 8 * scale,
           }}
         >
           {metric.id === "wind" ? <DirectionGlyph theme={theme} size={17 * scale} /> : null}
-          <span style={{ color: theme.accent, fontSize: 25 * scale, fontWeight: 300, lineHeight: 1 }}>
+          <span style={{ color: theme.accent, fontSize: 23 * scale, fontWeight: 300, lineHeight: 1 }}>
             {metric.subValue}
           </span>
         </div>
@@ -747,11 +485,12 @@ function TemperatureDial({
           position: "absolute",
           left: 0,
           right: 0,
-          top: size * 0.23,
+          top: size * 0.17,
           justifyContent: "center",
+          opacity: 0.82,
         }}
       >
-        <LineIcon icon="temperature" theme={theme} size={55 * scale} />
+        <LineIcon icon="temperature" theme={theme} size={42 * scale} />
       </div>
       <div
         style={{
@@ -759,16 +498,16 @@ function TemperatureDial({
           position: "absolute",
           left: 0,
           right: 0,
-          top: size * 0.58,
+          top: size * 0.42,
           flexDirection: "column",
           alignItems: "center",
-          gap: 6 * scale,
+          gap: 5 * scale,
         }}
       >
-        <span style={{ color: theme.ink, fontSize: 42 * scale, fontWeight: 300, lineHeight: 1 }}>
+        <span style={{ color: theme.ink, fontSize: 47 * scale, fontWeight: 500, lineHeight: 0.95 }}>
           {range.high ?? "--"}
         </span>
-        <span style={{ color: theme.ink, fontSize: 28 * scale, fontWeight: 300, lineHeight: 1 }}>
+        <span style={{ color: theme.ink, fontSize: 32 * scale, fontWeight: 400, lineHeight: 0.95 }}>
           {range.low ?? "--"}
         </span>
       </div>
@@ -880,6 +619,7 @@ function LineIcon({ icon, theme, size }: { icon: MetricIconName; theme: ThemeTok
 
   if (icon === "sunrise" || icon === "sunset") {
     const arc = icon === "sunrise" ? "M20 35 A12 12 0 0 1 44 35" : "M20 29 A12 12 0 0 0 44 29";
+    const horizon = icon === "sunrise" ? 35 : 29;
     const rays = icon === "sunrise"
       ? "M32 10 V16 M15 22 L20 26 M49 22 L44 26 M10 35 H16 M48 35 H54"
       : "M32 48 V54 M15 42 L20 38 M49 42 L44 38 M10 29 H16 M48 29 H54";
@@ -887,7 +627,7 @@ function LineIcon({ icon, theme, size }: { icon: MetricIconName; theme: ThemeTok
     return (
       <svg width={size} height={size} viewBox="0 0 64 64" style={{ display: "block" }}>
         <path d={arc} fill="none" stroke={color} strokeWidth={stroke} strokeLinecap="round" />
-        <path d="M9 35 H55" fill="none" stroke={muted} strokeWidth={stroke} strokeLinecap="round" opacity="0.8" />
+        <path d={`M9 ${horizon} H55`} fill="none" stroke={muted} strokeWidth={stroke} strokeLinecap="round" opacity="0.8" />
         <path d={rays} fill="none" stroke={color} strokeWidth={2.5} strokeLinecap="round" />
       </svg>
     );
@@ -905,25 +645,6 @@ function LineIcon({ icon, theme, size }: { icon: MetricIconName; theme: ThemeTok
       />
     </svg>
   );
-}
-
-function getWeatherIcon(condition: string): MetricIconName {
-  const normalized = condition.toLowerCase();
-
-  if (
-    normalized.includes("rain") ||
-    normalized.includes("drizzle") ||
-    normalized.includes("storm") ||
-    normalized.includes("snow")
-  ) {
-    return "rain";
-  }
-
-  if (normalized.includes("clear")) {
-    return "clear";
-  }
-
-  return "cloud";
 }
 
 function normalizeTemperature(value: number | null) {
@@ -950,31 +671,30 @@ function normalizeRatio(value: number | null, min: number, max: number) {
   return Math.min(1, Math.max(0, (value - min) / (max - min)));
 }
 
-function formatDate(dateKey: string) {
-  try {
-    const [year, month, day] = dateKey.split("-").map(Number);
-
-    if (!year || !month || !day) {
-      return dateKey;
-    }
-
-    return new Intl.DateTimeFormat("en", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      timeZone: "UTC",
-    }).format(new Date(Date.UTC(year, month - 1, day, 12)));
-  } catch {
-    return dateKey;
-  }
-}
-
 function formatOptionalTime12h(value: string | null) {
   if (!value) {
     return null;
   }
 
   return formatTime12h(value);
+}
+
+function formatRainPeakTime(chance: number | null, value: string | null) {
+  if (chance === null || Math.round(chance) <= 0) {
+    return null;
+  }
+
+  return formatOptionalTime12h(value);
+}
+
+function formatYearProgress(timestamp: number) {
+  const date = new Date(timestamp);
+  const year = date.getUTCFullYear();
+  const yearStart = Date.UTC(year, 0, 1);
+  const nextYearStart = Date.UTC(year + 1, 0, 1);
+  const progress = ((timestamp - yearStart) / (nextYearStart - yearStart)) * 100;
+
+  return `${Math.max(0, Math.min(100, progress)).toFixed(1)}%`;
 }
 
 function formatTime12h(value: string | null) {
@@ -1050,7 +770,7 @@ function positiveModulo(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
-function MoonPhase({ phase, theme, size }: { phase: MoonPhaseData; theme: ThemeTokens; size: number }) {
+function MoonPhase({ phase, size }: { phase: MoonPhaseData; size: number }) {
   const frameSize = size + 92;
   const center = 50;
   const radius = (size / frameSize) * 50;
@@ -1096,9 +816,6 @@ function MoonPhase({ phase, theme, size }: { phase: MoonPhaseData; theme: ThemeT
             <circle cx={center} cy={center} r={radius} />
           </clipPath>
         </defs>
-        <circle cx={center} cy={center} r="48" fill="none" stroke={theme.line} strokeOpacity="0.18" />
-        <circle cx={center} cy={center} r="43" fill="none" stroke={theme.line} strokeOpacity="0.24" />
-        <circle cx={center} cy={center} r={radius + 4} fill="none" stroke={theme.accent} strokeOpacity="0.42" />
         <g clipPath="url(#moonClip)">
           <circle cx={center} cy={center} r={radius} fill="url(#moonShadow)" />
           {moonElements.lightCircle ? (
@@ -1130,7 +847,6 @@ function MoonPhase({ phase, theme, size }: { phase: MoonPhaseData; theme: ThemeT
             />
           ))}
         </g>
-        <circle cx={center} cy={center} r={radius} fill="none" stroke={theme.ink} strokeOpacity="0.22" strokeWidth="0.9" />
       </svg>
     </div>
   );
