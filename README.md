@@ -7,7 +7,18 @@ A daily wallpaper brief containing various glance-able metrics: sunrise, sunset,
 Create a Shortcut with:
 
 1. Get Contents of URL: paste the [URL from the app](https://brevity-ios.vercel.app/api/wallpaper?label=Copenhagen&lat=55.6761&lon=12.5683&theme=night&size=iphone-15&temp=celsius&wind=kmh).
-2. Set Wallpaper: use the file returned by the previous action.
+2. To include health metrics, set the request method to POST and send this JSON body with text values:
+
+```json
+{
+  "RHR": "52",
+  "Vo2": "48"
+}
+```
+
+3. Set Wallpaper: use the file returned by the previous action.
+
+Missing, empty, or non-text health values are ignored, so the wallpaper still renders without placeholder text.
 
 For a daily wallpaper, run that Shortcut from a personal automation.
 

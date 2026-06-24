@@ -43,6 +43,8 @@ type MetricIconName =
   | "clear"
   | "cloud";
 
+type SummaryIconName = "timer" | "calendar" | "heart-rate" | "running" | "heart-oxygen";
+
 type MetricData = {
   id: string;
   value: string;
@@ -77,6 +79,11 @@ type MoonPhaseImageData = MoonPhaseAsset & {
   illumination: number;
 };
 
+type HealthMetrics = {
+  rhr: string | null;
+  vo2: string | null;
+};
+
 const SYNODIC_MONTH_DAYS = 29.530588853;
 const KNOWN_NEW_MOON_UTC = Date.UTC(2000, 0, 6, 18, 14);
 const SIX_MONTHS_SECONDS = 60 * 60 * 24 * 180;
@@ -88,6 +95,11 @@ const TEMPERATURE_DIAL_SWEEP = 356;
 const MOON_PHASE_ASSET_VERSION = "hires-1024-20260623";
 const MOON_PHASE_ASSET_TIMEOUT_MS = 2500;
 const DEFAULT_WALLPAPER_TIME_ZONE = "Europe/Copenhagen";
+const HEALTH_METRIC_MAX_LENGTH = 18;
+const EMPTY_HEALTH_METRICS: HealthMetrics = {
+  rhr: null,
+  vo2: null,
+};
 const MOON_PHASE_ASSETS: MoonPhaseAsset[] = [
   { id: "new", label: "New moon", path: "/moon-phases/phase_new.png" },
   { id: "waxing-crescent", label: "Waxing crescent", path: "/moon-phases/phase_waxing_crescent.png" },
@@ -134,6 +146,16 @@ const THEMES: Record<WallpaperTheme, ThemeTokens> = {
 };
 
 export async function GET(request: NextRequest) {
+  return renderWallpaper(request, EMPTY_HEALTH_METRICS);
+}
+
+export async function POST(request: NextRequest) {
+  const healthMetrics = await readHealthMetrics(request);
+
+  return renderWallpaper(request, healthMetrics);
+}
+
+async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetrics) {
   const searchParams = request.nextUrl.searchParams;
   const size = parseWallpaperSize(searchParams.get("size") ?? DISPLAY_CONFIG.wallpaperSize);
   const width = parseFiniteNumber(searchParams.get("width"), size.width, 720, 1800);
@@ -190,10 +212,12 @@ export async function GET(request: NextRequest) {
   const metricTop = height * 0.355 - displayLift;
   const topIconRowTop = height * 0.116 - 40 * scale;
   const topEdgeInset = width * 0.095;
+  const topMetricColumnWidth = 292 * scale;
   const yearProgress = formatYearProgress(now);
   const dateStamp = formatDayMonth(nowDate);
   const sunriseTime = DISPLAY_CONFIG.sections.sunrise ? formatTime12h(weather.sunrise) : null;
   const sunsetTime = DISPLAY_CONFIG.sections.sunset ? formatTime12h(weather.sunset) : null;
+  const moonPhaseImagePromise = getMoonPhaseImage(moonPhase, request.nextUrl.origin);
   const stravaCookieValue = request.cookies.get(STRAVA_CONNECTION_COOKIE)?.value;
   const stravaConnection = decodeStravaConnection(stravaCookieValue);
   const stravaSummary = await safelyGetStravaRunSummary(nowDate, stravaConnection);
@@ -274,18 +298,21 @@ export async function GET(request: NextRequest) {
         <CalendarProgress
           value={yearProgress}
           date={dateStamp}
+          rhr={healthMetrics.rhr}
           theme={theme}
           left={topEdgeInset}
           top={topIconRowTop}
+          width={topMetricColumnWidth}
           scale={scale}
         />
 
         <RunningSummary
           summary={stravaSummary}
+          vo2={healthMetrics.vo2}
           theme={theme}
-          left={width - topEdgeInset - width * 0.135}
+          left={width - topEdgeInset - topMetricColumnWidth}
           top={topIconRowTop}
-          width={width * 0.135}
+          width={topMetricColumnWidth}
           scale={scale}
         />
 
@@ -349,6 +376,41 @@ export async function GET(request: NextRequest) {
       headers,
     },
   );
+}
+
+async function readHealthMetrics(request: NextRequest): Promise<HealthMetrics> {
+  try {
+    const payload = (await request.json()) as unknown;
+
+    if (!isRecord(payload)) {
+      return EMPTY_HEALTH_METRICS;
+    }
+
+    return {
+      rhr: sanitizeHealthMetric(payload.RHR),
+      vo2: sanitizeHealthMetric(payload.Vo2),
+    };
+  } catch {
+    return EMPTY_HEALTH_METRICS;
+  }
+}
+
+function sanitizeHealthMetric(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const compactValue = value.replace(/[\x00-\x1f\x7f]/g, " ").replace(/\s+/g, " ").trim();
+
+  if (!compactValue || compactValue.length > HEALTH_METRIC_MAX_LENGTH) {
+    return null;
+  }
+
+  return compactValue;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function serializeStravaCookie(value: string, secure: boolean) {
@@ -453,76 +515,16 @@ function hashUnit(index: number, salt: number) {
 function CalendarProgress({
   value,
   date,
-  theme,
-  left,
-  top,
-  scale,
-}: {
-  value: string;
-  date: string;
-  theme: ThemeTokens;
-  left: number;
-  top: number;
-  scale: number;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        position: "absolute",
-        left,
-        top,
-        flexDirection: "column",
-        alignItems: "flex-start",
-        gap: 10 * scale,
-        color: "#ffffff",
-      }}
-    >
-      <CalendarIcon theme={theme} size={28 * scale} />
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-start",
-          gap: 5 * scale,
-        }}
-      >
-        <span
-          style={{
-            color: "#ffffff",
-            fontSize: 30 * scale,
-            fontWeight: 500,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          {value}
-        </span>
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: 21 * scale,
-            fontWeight: 400,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          {date}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function RunningSummary({
-  summary,
+  rhr,
   theme,
   left,
   top,
   width,
   scale,
 }: {
-  summary: StravaRunSummary | null;
+  value: string;
+  date: string;
+  rhr: string | null;
   theme: ThemeTokens;
   left: number;
   top: number;
@@ -538,45 +540,175 @@ function RunningSummary({
         top,
         width,
         flexDirection: "column",
+        alignItems: "flex-start",
+        gap: 10 * scale,
+        color: "#ffffff",
+      }}
+    >
+      <SummaryMetricRow icon="timer" value={value} theme={theme} scale={scale} />
+      <SummaryMetricRow icon="calendar" value={date} theme={theme} scale={scale} tone="muted" />
+      {rhr ? <SummaryMetricRow icon="heart-rate" value={rhr} theme={theme} scale={scale} /> : null}
+    </div>
+  );
+}
+
+function RunningSummary({
+  summary,
+  vo2,
+  theme,
+  left,
+  top,
+  width,
+  scale,
+}: {
+  summary: StravaRunSummary | null;
+  vo2: string | null;
+  theme: ThemeTokens;
+  left: number;
+  top: number;
+  width: number;
+  scale: number;
+}) {
+  const weeklyDistance = formatStravaDistance(summary?.lastWeekDistanceKm ?? null);
+  const monthlyDistance = formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null);
+  const runningValues = [
+    weeklyDistance ? { value: weeklyDistance, tone: "primary" as const } : null,
+    monthlyDistance ? { value: monthlyDistance, tone: "muted" as const } : null,
+  ].filter((item): item is { value: string; tone: "primary" | "muted" } => Boolean(item));
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        position: "absolute",
+        left,
+        top,
+        width,
+        flexDirection: "column",
         alignItems: "flex-end",
-        gap: 9 * scale,
+        gap: 12 * scale,
         color: theme.ink,
       }}
     >
-      <RunningIcon theme={theme} size={40 * scale} />
+      {runningValues.length > 0 ? (
+        <SummaryMetricStack icon="running" values={runningValues} theme={theme} scale={scale} align="end" />
+      ) : null}
+      {vo2 ? <SummaryMetricRow icon="heart-oxygen" value={vo2} theme={theme} scale={scale} align="end" /> : null}
+    </div>
+  );
+}
+
+function SummaryMetricRow({
+  icon,
+  value,
+  theme,
+  scale,
+  align = "start",
+  tone = "primary",
+}: {
+  icon: SummaryIconName;
+  value: string;
+  theme: ThemeTokens;
+  scale: number;
+  align?: "start" | "end";
+  tone?: "primary" | "muted";
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        width: "100%",
+        minHeight: 32 * scale,
+        alignItems: "center",
+        justifyContent: align === "end" ? "flex-end" : "flex-start",
+        gap: 11 * scale,
+      }}
+    >
+      <SummaryIcon icon={icon} theme={theme} size={30 * scale} />
+      <span
+        style={{
+          color: tone === "muted" ? theme.muted : "#ffffff",
+          fontSize: tone === "muted" ? 22 * scale : 27 * scale,
+          fontWeight: tone === "muted" ? 400 : 500,
+          lineHeight: 1,
+          letterSpacing: 0,
+        }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function SummaryMetricStack({
+  icon,
+  values,
+  theme,
+  scale,
+  align = "start",
+}: {
+  icon: SummaryIconName;
+  values: Array<{ value: string; tone: "primary" | "muted" }>;
+  theme: ThemeTokens;
+  scale: number;
+  align?: "start" | "end";
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        width: "100%",
+        alignItems: "center",
+        justifyContent: align === "end" ? "flex-end" : "flex-start",
+        gap: 11 * scale,
+      }}
+    >
+      <SummaryIcon icon={icon} theme={theme} size={32 * scale} />
       <div
         style={{
           display: "flex",
           flexDirection: "column",
-          alignItems: "flex-end",
+          alignItems: "flex-start",
           gap: 5 * scale,
         }}
       >
-        <span
-          style={{
-            color: "#ffffff",
-            fontSize: 24 * scale,
-            fontWeight: 500,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          {formatStravaDistance(summary?.lastWeekDistanceKm ?? null)}
-        </span>
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: 21 * scale,
-            fontWeight: 400,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          {formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null)}
-        </span>
+        {values.map((item, index) => (
+          <span
+            key={`${item.value}-${index}`}
+            style={{
+              color: item.tone === "muted" ? theme.muted : "#ffffff",
+              fontSize: item.tone === "muted" ? 21 * scale : 24 * scale,
+              fontWeight: item.tone === "muted" ? 400 : 500,
+              lineHeight: 1,
+              letterSpacing: 0,
+            }}
+          >
+            {item.value}
+          </span>
+        ))}
       </div>
     </div>
   );
+}
+
+function SummaryIcon({ icon, theme, size }: { icon: SummaryIconName; theme: ThemeTokens; size: number }) {
+  if (icon === "timer") {
+    return <TimerIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "calendar") {
+    return <CalendarIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "heart-rate") {
+    return <HeartRateIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "heart-oxygen") {
+    return <HeartOxygenIcon theme={theme} size={size} />;
+  }
+
+  return <RunningIcon theme={theme} size={size} />;
 }
 
 function CalendarIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
@@ -598,6 +730,79 @@ function CalendarIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
         strokeWidth="2"
         strokeLinecap="round"
         opacity="0.58"
+      />
+    </svg>
+  );
+}
+
+function TimerIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M12 3 H20 M16 3 V7 M23.5 8.5 L25.8 6.2"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <circle cx="16" cy="18" r="10" fill="none" stroke={theme.ink} strokeWidth="2.2" opacity="0.92" />
+      <path
+        d="M16 18 V12 M16 18 L21 21"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.82"
+      />
+    </svg>
+  );
+}
+
+function HeartRateIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M16 27 C9.2 21.2 5 17.1 5 12.2 C5 8.8 7.5 6.4 10.7 6.4 C12.8 6.4 14.6 7.5 16 9.2 C17.4 7.5 19.2 6.4 21.3 6.4 C24.5 6.4 27 8.8 27 12.2 C27 17.1 22.8 21.2 16 27 Z"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2"
+        strokeLinejoin="round"
+        opacity="0.92"
+      />
+      <path
+        d="M7.5 16 H12 L14 12 L17.2 20 L19.8 15.5 H24.5"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function HeartOxygenIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M16 27 C9.2 21.2 5 17.1 5 12.2 C5 8.8 7.5 6.4 10.7 6.4 C12.8 6.4 14.6 7.5 16 9.2 C17.4 7.5 19.2 6.4 21.3 6.4 C24.5 6.4 27 8.8 27 12.2 C27 17.1 22.8 21.2 16 27 Z"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="2"
+        strokeLinejoin="round"
+        opacity="0.92"
+      />
+      <circle cx="13" cy="15" r="2.3" fill="none" stroke={theme.ink} strokeWidth="1.8" opacity="0.84" />
+      <circle cx="20.5" cy="14" r="1.8" fill="none" stroke={theme.ink} strokeWidth="1.7" opacity="0.72" />
+      <path
+        d="M12 21 C15.1 18.5 19 18.2 22.5 20.2"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        opacity="0.74"
       />
     </svg>
   );
@@ -1094,6 +1299,10 @@ function normalizePercent(value: number | null) {
   return normalizeRatio(value, 0, 100);
 }
 
+function isRoundedZero(value: number | null) {
+  return value !== null && Math.round(value) <= 0;
+}
+
 function normalizeWind(value: number | null) {
   return normalizeRatio(value, 0, 60);
 }
@@ -1172,8 +1381,8 @@ function formatDayMonthInTimeZone(date: Date, timeZone: string) {
 }
 
 function formatStravaDistance(value: number | null) {
-  if (value === null) {
-    return "-- km";
+  if (value === null || !Number.isFinite(value) || value < 0) {
+    return null;
   }
 
   if (value >= 100) {
@@ -1295,11 +1504,18 @@ function loadMoonPhaseImageSource(asset: MoonPhaseAsset, origin: string) {
       }
 
       const contentType = response.headers.get("content-type") ?? "image/png";
+      if (!contentType.toLowerCase().startsWith("image/")) {
+        throw new Error(`Moon phase asset returned ${contentType}`);
+      }
+
       const buffer = await response.arrayBuffer();
 
       return `data:${contentType};base64,${arrayBufferToBase64(buffer)}`;
     })
-    .catch(() => null);
+    .catch(() => {
+      moonPhaseImageCache.delete(cacheKey);
+      return null;
+    });
 
   moonPhaseImageCache.set(cacheKey, loaded);
 
@@ -1331,7 +1547,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
 
 function MoonPhase({ image, size }: { image: MoonPhaseImageData; size: number }) {
   const frameSize = size + 92;
-  const illumination = Math.round(phase.illumination * 100);
+  const illumination = Math.round(Math.max(0, Math.min(1, image.illumination)) * 100);
 
   return (
     <div
