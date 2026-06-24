@@ -16,7 +16,6 @@ import {
   getStravaRunSummary,
   STRAVA_CONNECTION_COOKIE,
 } from "@/lib/strava";
-import type { StravaRunSummary } from "@/lib/strava";
 import { getWeatherSnapshot } from "@/lib/weather";
 import type { WeatherSnapshot } from "@/lib/weather";
 import {
@@ -52,12 +51,28 @@ type MetricIconName =
   | "clear"
   | "cloud";
 
+type TopRowIconName = "timer" | "calendar" | "rhr" | "running" | "vo2";
+
+type PostedHealthData = {
+  rhr: string | null;
+  vo2: string | null;
+};
+
+type TopRowData = {
+  id: string;
+  icon: TopRowIconName;
+  value: string | null;
+  subValue?: string | null;
+  muted?: boolean;
+};
+
 type MetricData = {
   id: string;
   value: string;
   icon: MetricIconName;
   graph?: number;
   subValue?: string | null;
+  direction?: number | null;
 };
 
 type TemperatureRangeData = {
@@ -82,6 +97,12 @@ const UV_DIAL_COLOR = "#ff3b30";
 const TEMPERATURE_DIAL_MIN = -6;
 const TEMPERATURE_DIAL_MAX = 30;
 const TEMPERATURE_DIAL_SWEEP = 356;
+const DEFAULT_WALLPAPER_TIME_ZONE = "Europe/Copenhagen";
+const MAX_HEALTH_TEXT_LENGTH = 18;
+const EMPTY_POSTED_HEALTH_DATA: PostedHealthData = {
+  rhr: null,
+  vo2: null,
+};
 
 const THEMES: Record<WallpaperTheme, ThemeTokens> = {
   dawn: {
@@ -117,6 +138,25 @@ const THEMES: Record<WallpaperTheme, ThemeTokens> = {
 };
 
 export async function GET(request: NextRequest) {
+  return safelyRenderWallpaper(request, EMPTY_POSTED_HEALTH_DATA);
+}
+
+export async function POST(request: NextRequest) {
+  const health = await readPostedHealthData(request);
+
+  return safelyRenderWallpaper(request, health);
+}
+
+async function safelyRenderWallpaper(request: NextRequest, health: PostedHealthData) {
+  try {
+    return await renderWallpaper(request, health);
+  } catch (error) {
+    console.error("Wallpaper render failed; using fallback wallpaper.", error);
+    return renderFallbackWallpaper(request);
+  }
+}
+
+async function renderWallpaper(request: NextRequest, health: PostedHealthData) {
   const searchParams = request.nextUrl.searchParams;
   const size = parseWallpaperSize(searchParams.get("size") ?? DISPLAY_CONFIG.wallpaperSize);
   const width = parseFiniteNumber(searchParams.get("width"), size.width, 720, 1800);
@@ -170,16 +210,31 @@ export async function GET(request: NextRequest) {
   const moonTextureUrl = new URL(getMoonPhaseImage(moonPhase.phase).src, request.nextUrl.origin).toString();
   const metricSize = 210 * scale;
   const metricGap = 45 * scale;
-  const metricRowWidth = metricSize * 4 + metricGap * 3;
   const metricTop = height * 0.355 - displayLift;
   const topIconRowTop = height * 0.116 - 40 * scale;
   const topEdgeInset = width * 0.095;
+  const topPanelWidth = width * 0.285;
   const yearProgress = formatYearProgress(now);
+  const dateStamp = formatDayMonth(nowDate);
   const sunriseTime = DISPLAY_CONFIG.sections.sunrise ? formatTime12h(weather.sunrise) : null;
   const sunsetTime = DISPLAY_CONFIG.sections.sunset ? formatTime12h(weather.sunset) : null;
   const stravaCookieValue = request.cookies.get(STRAVA_CONNECTION_COOKIE)?.value;
   const stravaConnection = decodeStravaConnection(stravaCookieValue);
   const stravaSummary = await safelyGetStravaRunSummary(nowDate, stravaConnection);
+  const leftRows: TopRowData[] = [
+    { id: "year", icon: "timer", value: yearProgress },
+    { id: "date", icon: "calendar", value: dateStamp, muted: true },
+    { id: "rhr", icon: "rhr", value: health.rhr },
+  ];
+  const rightRows: TopRowData[] = [
+    {
+      id: "run",
+      icon: "running",
+      value: formatStravaDistance(stravaSummary?.lastWeekDistanceKm ?? null),
+      subValue: formatStravaDistance(stravaSummary?.lastFourWeeksDistanceKm ?? null),
+    },
+    { id: "vo2", icon: "vo2", value: health.vo2 },
+  ];
   const temperatureRange: TemperatureRangeData | null =
     DISPLAY_CONFIG.sections.weatherToday.high || DISPLAY_CONFIG.sections.weatherToday.low
       ? {
@@ -196,7 +251,7 @@ export async function GET(request: NextRequest) {
         }
       : null;
   const weatherMetricItems: Array<MetricData | null> = [
-    DISPLAY_CONFIG.sections.weatherToday.rainChance
+    DISPLAY_CONFIG.sections.weatherToday.rainChance && !isRoundedZero(weather.rainChance)
       ? {
           id: "rain",
           value: formatPercent(weather.rainChance),
@@ -211,7 +266,7 @@ export async function GET(request: NextRequest) {
           value: formatWind(weather.windMax, weather.windUnitLabel),
           icon: "wind",
           graph: normalizeWind(weather.windMax),
-          subValue: formatWindDirection(weather.windDirection),
+          direction: normalizeWindDirectionAngle(weather.windDirection),
         }
       : null,
     DISPLAY_CONFIG.sections.weatherToday.uvMax
@@ -227,6 +282,8 @@ export async function GET(request: NextRequest) {
   const rainMetric = weatherMetrics.find((metric) => metric.id === "rain");
   const windMetric = weatherMetrics.find((metric) => metric.id === "wind");
   const uvMetric = weatherMetrics.find((metric) => metric.id === "uv");
+  const metricCount = [rainMetric, windMetric, temperatureRange, uvMetric].filter(Boolean).length;
+  const metricRowWidth = metricCount > 0 ? metricSize * metricCount + metricGap * (metricCount - 1) : 0;
   const headers: Record<string, string> = {
     "cache-control": "private, no-store",
   };
@@ -252,14 +309,23 @@ export async function GET(request: NextRequest) {
       >
         <StarryBackdrop width={width} height={height} theme={theme} />
 
-        <CalendarProgress value={yearProgress} theme={theme} left={topEdgeInset} top={topIconRowTop} scale={scale} />
-
-        <RunningSummary
-          summary={stravaSummary}
+        <TopDataPanel
+          rows={leftRows}
           theme={theme}
-          left={width - topEdgeInset - width * 0.135}
+          left={topEdgeInset}
           top={topIconRowTop}
-          width={width * 0.135}
+          width={topPanelWidth}
+          align="left"
+          scale={scale}
+        />
+
+        <TopDataPanel
+          rows={rightRows}
+          theme={theme}
+          left={width - topEdgeInset - topPanelWidth}
+          top={topIconRowTop}
+          width={topPanelWidth}
+          align="right"
           scale={scale}
         />
 
@@ -325,6 +391,66 @@ export async function GET(request: NextRequest) {
   );
 }
 
+function renderFallbackWallpaper(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const size = parseWallpaperSize(searchParams.get("size") ?? DISPLAY_CONFIG.wallpaperSize);
+  const width = parseFiniteNumber(searchParams.get("width"), size.width, 720, 1800);
+  const height = parseFiniteNumber(searchParams.get("height"), size.height, 1280, 3600);
+  const themeName = sanitizeTheme(searchParams.get("theme") ?? DISPLAY_CONFIG.theme);
+  const theme = THEMES[themeName];
+  const scale = width / 1179;
+  const dateStamp = formatDayMonth(new Date()) ?? "Today";
+
+  return new ImageResponse(
+    (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          position: "relative",
+          overflow: "hidden",
+          alignItems: "center",
+          justifyContent: "center",
+          background: theme.background,
+          color: theme.ink,
+          fontFamily: "Helvetica Neue, Arial, Helvetica, sans-serif",
+        }}
+      >
+        <StarryBackdrop width={width} height={height} theme={theme} />
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 18 * scale,
+          }}
+        >
+          <CalendarIcon theme={theme} size={58 * scale} />
+          <span
+            style={{
+              color: theme.ink,
+              fontSize: 44 * scale,
+              fontWeight: 500,
+              lineHeight: 1,
+              letterSpacing: 0,
+            }}
+          >
+            {dateStamp}
+          </span>
+        </div>
+      </div>
+    ),
+    {
+      width,
+      height,
+      headers: {
+        "cache-control": "private, no-store",
+      },
+    },
+  );
+}
+
 function serializeStravaCookie(value: string, secure: boolean) {
   return [
     `${STRAVA_CONNECTION_COOKIE}=${value}`,
@@ -336,6 +462,43 @@ function serializeStravaCookie(value: string, secure: boolean) {
   ]
     .filter(Boolean)
     .join("; ");
+}
+
+async function readPostedHealthData(request: NextRequest): Promise<PostedHealthData> {
+  try {
+    return parsePostedHealthData(await request.json());
+  } catch {
+    return EMPTY_POSTED_HEALTH_DATA;
+  }
+}
+
+function parsePostedHealthData(value: unknown): PostedHealthData {
+  if (!isRecord(value)) {
+    return EMPTY_POSTED_HEALTH_DATA;
+  }
+
+  return {
+    rhr: readHealthText(value.RHR),
+    vo2: readHealthText(value.Vo2),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readHealthText(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\s+/gu, " ");
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.slice(0, MAX_HEALTH_TEXT_LENGTH);
 }
 
 function StarryBackdrop({ width, height, theme }: { width: number; height: number; theme: ThemeTokens }) {
@@ -424,63 +587,29 @@ function hashUnit(index: number, salt: number) {
   return value - Math.floor(value);
 }
 
-function CalendarProgress({
-  value,
-  theme,
-  left,
-  top,
-  scale,
-}: {
-  value: string;
-  theme: ThemeTokens;
-  left: number;
-  top: number;
-  scale: number;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        position: "absolute",
-        left,
-        top,
-        flexDirection: "column",
-        alignItems: "flex-start",
-        gap: 10 * scale,
-        color: "#ffffff",
-      }}
-    >
-      <CalendarIcon theme={theme} size={28 * scale} />
-      <span
-        style={{
-          color: "#ffffff",
-          fontSize: 30 * scale,
-          fontWeight: 500,
-          lineHeight: 1,
-          letterSpacing: 0,
-        }}
-      >
-        {value}
-      </span>
-    </div>
-  );
-}
-
-function RunningSummary({
-  summary,
+function TopDataPanel({
+  rows,
   theme,
   left,
   top,
   width,
+  align,
   scale,
 }: {
-  summary: StravaRunSummary | null;
+  rows: TopRowData[];
   theme: ThemeTokens;
   left: number;
   top: number;
   width: number;
+  align: "left" | "right";
   scale: number;
 }) {
+  const visibleRows = rows.filter((row) => Boolean(row.value || row.subValue));
+
+  if (visibleRows.length === 0) {
+    return null;
+  }
+
   return (
     <div
       style={{
@@ -490,44 +619,123 @@ function RunningSummary({
         top,
         width,
         flexDirection: "column",
-        alignItems: "flex-end",
-        gap: 9 * scale,
-        color: theme.ink,
+        alignItems: align === "right" ? "flex-end" : "flex-start",
+        gap: 12 * scale,
+        color: "#ffffff",
       }}
     >
-      <RunningIcon theme={theme} size={40 * scale} />
+      {visibleRows.map((row) => (
+        <TopDataRow key={row.id} row={row} theme={theme} align={align} scale={scale} />
+      ))}
+    </div>
+  );
+}
+
+function TopDataRow({
+  row,
+  theme,
+  align,
+  scale,
+}: {
+  row: TopRowData;
+  theme: ThemeTokens;
+  align: "left" | "right";
+  scale: number;
+}) {
+  const primaryValue = row.value ?? row.subValue;
+
+  if (!primaryValue) {
+    return null;
+  }
+
+  const valueFontSize = primaryValue.length > 12 ? 22 * scale : 27 * scale;
+  const subValueFontSize = row.subValue && row.subValue.length > 12 ? 20 * scale : 23 * scale;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        width: "100%",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: align === "right" ? "flex-end" : "flex-start",
+        gap: 11 * scale,
+      }}
+    >
+      <TopRowIcon icon={row.icon} theme={theme} size={31 * scale} />
       <div
         style={{
           display: "flex",
           flexDirection: "column",
-          alignItems: "flex-end",
+          alignItems: align === "right" ? "flex-end" : "flex-start",
           gap: 5 * scale,
         }}
       >
-        <span
-          style={{
-            color: "#ffffff",
-            fontSize: 24 * scale,
-            fontWeight: 500,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          W {formatStravaDistance(summary?.lastWeekDistanceKm ?? null)}
-        </span>
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: 21 * scale,
-            fontWeight: 400,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          M {formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null)}
-        </span>
+        {row.value ? (
+          <span
+            style={{
+              color: row.muted ? theme.muted : "#ffffff",
+              fontSize: valueFontSize,
+              fontWeight: row.muted ? 400 : 500,
+              lineHeight: 1,
+              letterSpacing: 0,
+              textAlign: align,
+            }}
+          >
+            {row.value}
+          </span>
+        ) : null}
+        {row.subValue ? (
+          <span
+            style={{
+              color: theme.muted,
+              fontSize: subValueFontSize,
+              fontWeight: 400,
+              lineHeight: 1,
+              letterSpacing: 0,
+              textAlign: align,
+            }}
+          >
+            {row.subValue}
+          </span>
+        ) : null}
       </div>
     </div>
+  );
+}
+
+function TopRowIcon({ icon, theme, size }: { icon: TopRowIconName; theme: ThemeTokens; size: number }) {
+  if (icon === "timer") {
+    return <TimerIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "calendar") {
+    return <CalendarIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "running") {
+    return <RunningIcon theme={theme} size={size} />;
+  }
+
+  return <HeartIcon theme={theme} size={size} variant={icon === "vo2" ? "capacity" : "resting"} />;
+}
+
+function TimerIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M13 4 H19 M16 4 V7 M22.5 8.5 L24.5 6.5"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.84"
+      />
+      <circle cx="16" cy="18" r="10" fill="none" stroke={theme.ink} strokeWidth="2" opacity="0.9" />
+      <path d="M16 12 V18 L20 21" fill="none" stroke={theme.accent} strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M16 8 A10 10 0 0 1 26 18" fill="none" stroke={theme.accent} strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -550,6 +758,67 @@ function CalendarIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
         strokeWidth="2"
         strokeLinecap="round"
         opacity="0.58"
+      />
+    </svg>
+  );
+}
+
+function HeartIcon({
+  theme,
+  size,
+  variant,
+}: {
+  theme: ThemeTokens;
+  size: number;
+  variant: "resting" | "capacity";
+}) {
+  const heartPath =
+    "M16 27 C9.5 21.6 5 17.7 5 12.5 C5 9.4 7.4 7 10.5 7 C12.5 7 14.3 8 16 10 C17.7 8 19.5 7 21.5 7 C24.6 7 27 9.4 27 12.5 C27 17.7 22.5 21.6 16 27 Z";
+
+  if (variant === "capacity") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+        <path
+          d={heartPath}
+          fill="none"
+          stroke={theme.ink}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity="0.9"
+        />
+        <circle cx="22.5" cy="7.5" r="2" fill="none" stroke={theme.accent} strokeWidth="1.8" />
+        <circle cx="26.5" cy="4.5" r="1.35" fill="none" stroke={theme.accent} strokeWidth="1.6" opacity="0.82" />
+        <path
+          d="M12 16 C13.8 13.4 18.2 13.4 20 16 M13.5 19 C15 17.4 17 17.4 18.5 19"
+          fill="none"
+          stroke={theme.accent}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          opacity="0.9"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d={heartPath}
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.9"
+      />
+      <path
+        d="M8 17 H12 L14 13 L17 21 L19.5 16 H24"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -644,7 +913,8 @@ function MetricDial({
   scale: number;
 }) {
   const valueFontSize = metric.id === "wind" ? 35 * scale : 49 * scale;
-  const hasSubValue = Boolean(metric.subValue);
+  const hasWindDirection = metric.id === "wind" && typeof metric.direction === "number";
+  const hasSupplement = Boolean(metric.subValue) || hasWindDirection;
   const dialColor = getMetricDialColor(metric.id, theme);
 
   return (
@@ -669,7 +939,7 @@ function MetricDial({
           position: "absolute",
           left: 0,
           right: 0,
-          top: hasSubValue ? size * 0.49 : size * 0.54,
+          top: hasSupplement ? size * 0.49 : size * 0.54,
           justifyContent: "center",
         }}
       >
@@ -677,7 +947,7 @@ function MetricDial({
           {metric.value}
         </span>
       </div>
-      {hasSubValue ? (
+      {hasSupplement ? (
         <div
           style={{
             display: "flex",
@@ -690,26 +960,39 @@ function MetricDial({
             gap: 8 * scale,
           }}
         >
-          {metric.id === "wind" ? <DirectionGlyph theme={theme} size={17 * scale} /> : null}
-          <span style={{ color: theme.accent, fontSize: 23 * scale, fontWeight: 300, lineHeight: 1 }}>
-            {metric.subValue}
-          </span>
+          {hasWindDirection ? (
+            <DirectionGlyph theme={theme} size={33 * scale} direction={metric.direction ?? 0} />
+          ) : null}
+          {metric.subValue ? (
+            <span style={{ color: theme.accent, fontSize: 23 * scale, fontWeight: 300, lineHeight: 1 }}>
+              {metric.subValue}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-function DirectionGlyph({ theme, size }: { theme: ThemeTokens; size: number }) {
+function DirectionGlyph({
+  theme,
+  size,
+  direction,
+}: {
+  theme: ThemeTokens;
+  size: number;
+  direction: number;
+}) {
   return (
-    <svg width={size} height={size} viewBox="0 0 20 20" style={{ display: "block" }}>
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
       <path
-        d="M3 3 L17 9 L10 11 L8 18 Z"
+        d="M16 4 L25 28 L16 23 L7 28 Z"
         fill="none"
         stroke={theme.accent}
-        strokeWidth="2"
+        strokeWidth="2.4"
         strokeLinejoin="round"
         strokeLinecap="round"
+        transform={`rotate(${direction} 16 16)`}
       />
     </svg>
   );
@@ -1141,9 +1424,26 @@ function formatYearProgress(timestamp: number) {
   return `${Math.max(0, Math.min(100, progress)).toFixed(1)}%`;
 }
 
+function formatDayMonth(value: Date) {
+  if (!Number.isFinite(value.getTime())) {
+    return null;
+  }
+
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      day: "numeric",
+      month: "short",
+      timeZone: DEFAULT_WALLPAPER_TIME_ZONE,
+    }).format(value);
+  } catch {
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${value.getUTCDate()} ${months[value.getUTCMonth()]}`;
+  }
+}
+
 function formatStravaDistance(value: number | null) {
   if (value === null) {
-    return "-- km";
+    return null;
   }
 
   if (value >= 100) {
@@ -1196,15 +1496,16 @@ function formatWind(value: number | null, unit: string) {
   return value === null ? "--" : `${Math.round(value)} ${unit}`;
 }
 
-function formatWindDirection(value: number | null) {
+function isRoundedZero(value: number | null) {
+  return value !== null && Math.round(value) <= 0;
+}
+
+function normalizeWindDirectionAngle(value: number | null) {
   if (value === null) {
     return null;
   }
 
-  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  const index = Math.round((((value % 360) + 360) % 360) / 45) % directions.length;
-
-  return directions[index];
+  return positiveModulo(value, 360);
 }
 
 function formatUv(value: number | null) {
