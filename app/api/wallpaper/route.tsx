@@ -177,7 +177,6 @@ export async function GET(request: NextRequest) {
   const now = Date.now();
   const nowDate = new Date(now);
   const moonPhase = getMoonPhase(now);
-  const moonPhaseImagePromise = getMoonPhaseImage(moonPhase, request.nextUrl.origin);
   const scale = width / 1179;
   const centerX = width / 2;
   const displayLift = height * 0.08;
@@ -1111,10 +1110,6 @@ function normalizeRatio(value: number | null, min: number, max: number) {
   return Math.min(1, Math.max(0, (value - min) / (max - min)));
 }
 
-function isRoundedZero(value: number | null) {
-  return value !== null && Math.round(value) === 0;
-}
-
 async function safelyGetStravaRunSummary(now: Date, stravaConnection: ReturnType<typeof decodeStravaConnection>) {
   try {
     return await getStravaRunSummary(now, stravaConnection);
@@ -1336,7 +1331,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
 
 function MoonPhase({ image, size }: { image: MoonPhaseImageData; size: number }) {
   const frameSize = size + 92;
-  const illumination = Math.round(image.illumination * 100);
+  const illumination = Math.round(phase.illumination * 100);
 
   return (
     <div
