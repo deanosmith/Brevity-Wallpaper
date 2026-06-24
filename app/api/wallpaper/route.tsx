@@ -62,6 +62,7 @@ type MetricData = {
   value: string;
   icon: MetricIconName;
   graph?: number;
+  hideDial?: boolean;
   subValue?: string | null;
   direction?: number | null;
 };
@@ -212,6 +213,7 @@ async function renderWallpaper(request: NextRequest, health: PostedHealthData) {
   const now = Date.now();
   const nowDate = new Date(now);
   const moonPhase = getMoonPhase(now);
+  const moonPhaseImagePromise = getMoonPhaseImage(moonPhase, request.nextUrl.origin);
   const scale = width / 1179;
   const centerX = width / 2;
   const displayLift = height * 0.08;
@@ -269,6 +271,7 @@ async function renderWallpaper(request: NextRequest, health: PostedHealthData) {
           value: formatPercent(weather.rainChance),
           icon: "rain",
           graph: normalizePercent(weather.rainChance),
+          hideDial: isRoundedZero(weather.rainChance),
           subValue: formatRainPeakTime(weather.rainChance, weather.rainPeakTime),
         }
       : null,
@@ -515,8 +518,8 @@ function readHealthText(value: unknown) {
 
 function StarryBackdrop({ width, height, theme }: { width: number; height: number; theme: ThemeTokens }) {
   const scale = width / 1179;
-  const tinyStars = Array.from({ length: 250 });
-  const brightStars = Array.from({ length: 34 });
+  const tinyStars = Array.from({ length: 750 });
+  const brightStars = Array.from({ length: 102 });
   const starTones = ["#f7f9ff", "#dbe8ff", "#fff4dd", "#e8f1ff"];
 
   return (
@@ -561,7 +564,7 @@ function StarryBackdrop({ width, height, theme }: { width: number; height: numbe
           />
         );
       })}
-      {Array.from({ length: 9 }).map((_, index) => {
+      {Array.from({ length: 27 }).map((_, index) => {
         const x = hashUnit(index, 67) * width;
         const y = hashUnit(index, 71) * height;
         const ray = (2.1 + hashUnit(index, 73) * 1.4) * scale;
@@ -931,7 +934,9 @@ function MetricDial({
 
   return (
     <div style={{ display: "flex", position: "relative", width: size, height: size }}>
-      <DialRings progress={metric.graph ?? 0.2} theme={theme} size={size} accent={dialColor} />
+      {metric.hideDial ? null : (
+        <DialRings progress={metric.graph ?? 0.2} theme={theme} size={size} accent={dialColor} />
+      )}
       <div
         style={{
           display: "flex",
@@ -1023,9 +1028,6 @@ function TemperatureDial({
 }) {
   const highColor = temperatureColor(range.highGraph);
   const lowColor = temperatureColor(range.lowGraph);
-  const labelFontSize = size * 0.067;
-  const labelTop = size * 0.858;
-  const labelWidth = size * 0.16;
 
   return (
     <div style={{ display: "flex", position: "relative", width: size, height: size }}>
@@ -1060,50 +1062,6 @@ function TemperatureDial({
         </span>
         <span style={{ color: lowColor, fontSize: 31 * scale, fontWeight: 400, lineHeight: 0.95 }}>
           {range.low ?? "--"}
-        </span>
-      </div>
-      <div
-        style={{
-          display: "flex",
-          position: "absolute",
-          left: size * 0.38 - labelWidth,
-          top: labelTop,
-          width: labelWidth,
-          justifyContent: "flex-end",
-        }}
-      >
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: labelFontSize,
-            fontWeight: 400,
-            lineHeight: 1,
-            opacity: 0.62,
-          }}
-        >
-          {TEMPERATURE_DIAL_MIN}
-        </span>
-      </div>
-      <div
-        style={{
-          display: "flex",
-          position: "absolute",
-          left: size * 0.62,
-          top: labelTop,
-          width: labelWidth,
-          justifyContent: "flex-start",
-        }}
-      >
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: labelFontSize,
-            fontWeight: 400,
-            lineHeight: 1,
-            opacity: 0.62,
-          }}
-        >
-          {TEMPERATURE_DIAL_MAX}
         </span>
       </div>
     </div>
@@ -1402,6 +1360,10 @@ function normalizeRatio(value: number | null, min: number, max: number) {
   return Math.min(1, Math.max(0, (value - min) / (max - min)));
 }
 
+function isRoundedZero(value: number | null) {
+  return value !== null && Math.round(value) === 0;
+}
+
 async function safelyGetStravaRunSummary(now: Date, stravaConnection: ReturnType<typeof decodeStravaConnection>) {
   try {
     return await getStravaRunSummary(now, stravaConnection);
@@ -1662,7 +1624,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
 
 function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: string | null; size: number }) {
   const frameSize = size + 92;
-  const illumination = Math.round(phase.illumination * 100);
+  const illumination = Math.round(image.illumination * 100);
 
   return (
     <div

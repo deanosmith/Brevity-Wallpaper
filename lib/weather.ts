@@ -107,13 +107,9 @@ export async function getWeatherSnapshot({
     hourly: "precipitation_probability",
   });
 
-  const timeoutSignal =
-    typeof AbortSignal.timeout === "function"
-      ? AbortSignal.timeout(WEATHER_REQUEST_TIMEOUT_MS)
-      : undefined;
   const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
     next: { revalidate: 60 * 30 },
-    ...(timeoutSignal ? { signal: timeoutSignal } : {}),
+    signal: weatherRequestSignal(),
   });
 
   if (!response.ok) {
@@ -147,6 +143,17 @@ function valueAt(values?: number[]): number | null {
   const value = values?.[0];
 
   return Number.isFinite(value) ? (value as number) : null;
+}
+
+function weatherRequestSignal() {
+  if (typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(WEATHER_REQUEST_TIMEOUT_MS);
+  }
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), WEATHER_REQUEST_TIMEOUT_MS);
+
+  return controller.signal;
 }
 
 function peakTime(times?: string[], values?: number[]) {

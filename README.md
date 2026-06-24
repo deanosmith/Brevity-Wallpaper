@@ -55,9 +55,12 @@ Optional:
 - `STRAVA_REDIRECT_URI`
 - `STRAVA_SCOPE`
 - `STRAVA_TIME_ZONE`
+- `WALLPAPER_TIME_ZONE`
 
 The app requests `activity:read_all` by default so private runs can be included. Set `STRAVA_SCOPE=activity:read` if you only want activities visible to Everyone and Followers. `STRAVA_ACCESS_TOKEN_EXPIRES_AT` is optional; if it is absent, the app will try the access token as-is.
 Strava can rotate refresh tokens after a refresh, so for long-running server-side use, keep `STRAVA_REFRESH_TOKEN` current in Vercel.
 In the Strava developer settings, set the authorization callback domain to your deployed host. Localhost and `127.0.0.1` are allowed for local development.
+
+The Connect Strava button stores an OAuth connection in the current browser. iOS Shortcuts `Get Contents of URL` does not use that browser session, so automatic wallpaper updates need the server-side `STRAVA_*` environment values in Vercel if you want running metrics in the PNG route.
 
 `Feel free to fork and customise`
