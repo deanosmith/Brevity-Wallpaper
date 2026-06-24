@@ -12,13 +12,15 @@ Create a Shortcut with:
 ```json
 {
   "RHR": "52",
-  "Vo2": "48"
+  "Vo2": "48",
+  "Cycle": "Day 12",
+  "Ex": "45 min"
 }
 ```
 
 3. Set Wallpaper: use the file returned by the previous action.
 
-Missing, empty, or non-text health values are ignored, so the wallpaper still renders without placeholder text.
+Missing, empty, or non-text metric values are ignored, so the wallpaper still renders without placeholder text.
 
 For a daily wallpaper, run that Shortcut from a personal automation.
 

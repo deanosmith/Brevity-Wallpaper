@@ -43,7 +43,15 @@ type MetricIconName =
   | "clear"
   | "cloud";
 
-type SummaryIconName = "timer" | "calendar" | "heart-rate" | "running" | "heart-oxygen";
+type SummaryIconName =
+  | "timer"
+  | "calendar"
+  | "heart-rate"
+  | "running-week"
+  | "running-month"
+  | "heart-oxygen"
+  | "cycle"
+  | "exercise";
 
 type MetricData = {
   id: string;
@@ -82,6 +90,8 @@ type MoonPhaseImageData = MoonPhaseAsset & {
 type HealthMetrics = {
   rhr: string | null;
   vo2: string | null;
+  cycle: string | null;
+  exercise: string | null;
 };
 
 const SYNODIC_MONTH_DAYS = 29.530588853;
@@ -99,6 +109,8 @@ const HEALTH_METRIC_MAX_LENGTH = 18;
 const EMPTY_HEALTH_METRICS: HealthMetrics = {
   rhr: null,
   vo2: null,
+  cycle: null,
+  exercise: null,
 };
 const MOON_PHASE_ASSETS: MoonPhaseAsset[] = [
   { id: "new", label: "New moon", path: "/moon-phases/phase_new.png" },
@@ -309,6 +321,8 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
         <RunningSummary
           summary={stravaSummary}
           vo2={healthMetrics.vo2}
+          cycle={healthMetrics.cycle}
+          exercise={healthMetrics.exercise}
           theme={theme}
           left={width - topEdgeInset - topMetricColumnWidth}
           top={topIconRowTop}
@@ -389,6 +403,8 @@ async function readHealthMetrics(request: NextRequest): Promise<HealthMetrics> {
     return {
       rhr: sanitizeHealthMetric(payload.RHR),
       vo2: sanitizeHealthMetric(payload.Vo2),
+      cycle: sanitizeHealthMetric(payload.Cycle),
+      exercise: sanitizeHealthMetric(payload.Ex),
     };
   } catch {
     return EMPTY_HEALTH_METRICS;
@@ -546,7 +562,7 @@ function CalendarProgress({
       }}
     >
       <SummaryMetricRow icon="timer" value={value} theme={theme} scale={scale} />
-      <SummaryMetricRow icon="calendar" value={date} theme={theme} scale={scale} tone="muted" />
+      <SummaryMetricRow icon="calendar" value={date} theme={theme} scale={scale} />
       {rhr ? <SummaryMetricRow icon="heart-rate" value={rhr} theme={theme} scale={scale} /> : null}
     </div>
   );
@@ -555,6 +571,8 @@ function CalendarProgress({
 function RunningSummary({
   summary,
   vo2,
+  cycle,
+  exercise,
   theme,
   left,
   top,
@@ -563,6 +581,8 @@ function RunningSummary({
 }: {
   summary: StravaRunSummary | null;
   vo2: string | null;
+  cycle: string | null;
+  exercise: string | null;
   theme: ThemeTokens;
   left: number;
   top: number;
@@ -571,10 +591,6 @@ function RunningSummary({
 }) {
   const weeklyDistance = formatStravaDistance(summary?.lastWeekDistanceKm ?? null);
   const monthlyDistance = formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null);
-  const runningValues = [
-    weeklyDistance ? { value: weeklyDistance, tone: "primary" as const } : null,
-    monthlyDistance ? { value: monthlyDistance, tone: "muted" as const } : null,
-  ].filter((item): item is { value: string; tone: "primary" | "muted" } => Boolean(item));
 
   return (
     <div
@@ -590,10 +606,15 @@ function RunningSummary({
         color: theme.ink,
       }}
     >
-      {runningValues.length > 0 ? (
-        <SummaryMetricStack icon="running" values={runningValues} theme={theme} scale={scale} align="end" />
+      {weeklyDistance ? (
+        <SummaryMetricRow icon="running-week" value={weeklyDistance} theme={theme} scale={scale} align="end" />
+      ) : null}
+      {monthlyDistance ? (
+        <SummaryMetricRow icon="running-month" value={monthlyDistance} theme={theme} scale={scale} align="end" />
       ) : null}
       {vo2 ? <SummaryMetricRow icon="heart-oxygen" value={vo2} theme={theme} scale={scale} align="end" /> : null}
+      {cycle ? <SummaryMetricRow icon="cycle" value={cycle} theme={theme} scale={scale} align="end" /> : null}
+      {exercise ? <SummaryMetricRow icon="exercise" value={exercise} theme={theme} scale={scale} align="end" /> : null}
     </div>
   );
 }
@@ -604,14 +625,12 @@ function SummaryMetricRow({
   theme,
   scale,
   align = "start",
-  tone = "primary",
 }: {
   icon: SummaryIconName;
   value: string;
   theme: ThemeTokens;
   scale: number;
   align?: "start" | "end";
-  tone?: "primary" | "muted";
 }) {
   return (
     <div
@@ -627,66 +646,15 @@ function SummaryMetricRow({
       <SummaryIcon icon={icon} theme={theme} size={30 * scale} />
       <span
         style={{
-          color: tone === "muted" ? theme.muted : "#ffffff",
-          fontSize: tone === "muted" ? 22 * scale : 27 * scale,
-          fontWeight: tone === "muted" ? 400 : 500,
+          color: "#ffffff",
+          fontSize: 27 * scale,
+          fontWeight: 500,
           lineHeight: 1,
           letterSpacing: 0,
         }}
       >
         {value}
       </span>
-    </div>
-  );
-}
-
-function SummaryMetricStack({
-  icon,
-  values,
-  theme,
-  scale,
-  align = "start",
-}: {
-  icon: SummaryIconName;
-  values: Array<{ value: string; tone: "primary" | "muted" }>;
-  theme: ThemeTokens;
-  scale: number;
-  align?: "start" | "end";
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        width: "100%",
-        alignItems: "center",
-        justifyContent: align === "end" ? "flex-end" : "flex-start",
-        gap: 11 * scale,
-      }}
-    >
-      <SummaryIcon icon={icon} theme={theme} size={32 * scale} />
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-start",
-          gap: 5 * scale,
-        }}
-      >
-        {values.map((item, index) => (
-          <span
-            key={`${item.value}-${index}`}
-            style={{
-              color: item.tone === "muted" ? theme.muted : "#ffffff",
-              fontSize: item.tone === "muted" ? 21 * scale : 24 * scale,
-              fontWeight: item.tone === "muted" ? 400 : 500,
-              lineHeight: 1,
-              letterSpacing: 0,
-            }}
-          >
-            {item.value}
-          </span>
-        ))}
-      </div>
     </div>
   );
 }
@@ -708,7 +676,19 @@ function SummaryIcon({ icon, theme, size }: { icon: SummaryIconName; theme: Them
     return <HeartOxygenIcon theme={theme} size={size} />;
   }
 
-  return <RunningIcon theme={theme} size={size} />;
+  if (icon === "running-week") {
+    return <RunningIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "running-month") {
+    return <RunningRouteIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "cycle") {
+    return <CycleIcon theme={theme} size={size} />;
+  }
+
+  return <ExerciseIcon theme={theme} size={size} />;
 }
 
 function CalendarIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
@@ -803,6 +783,92 @@ function HeartOxygenIcon({ theme, size }: { theme: ThemeTokens; size: number }) 
         strokeWidth="1.9"
         strokeLinecap="round"
         opacity="0.74"
+      />
+    </svg>
+  );
+}
+
+function RunningRouteIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M7 25 C12 17 20 15 25 7"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeDasharray="1 4"
+        opacity="0.72"
+      />
+      <circle cx="7" cy="25" r="3" fill="none" stroke={theme.accent} strokeWidth="2" />
+      <circle cx="25" cy="7" r="3" fill="none" stroke={theme.ink} strokeWidth="2" opacity="0.9" />
+      <path
+        d="M13 19 L17 16 M17 16 L16 21 M17 16 L21 18"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function CycleIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M24.8 11.2 C23.2 8.1 20 6 16.2 6 C10.7 6 6.3 10.3 6.3 15.8"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2.1"
+        strokeLinecap="round"
+      />
+      <path
+        d="M21.5 10.8 H25.3 V7"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7.2 20.8 C8.8 23.9 12 26 15.8 26 C21.3 26 25.7 21.7 25.7 16.2"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        opacity="0.82"
+      />
+      <path
+        d="M10.5 21.2 H6.7 V25"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="2.1"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function ExerciseIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M7 12 V20 M11 10 V22 M21 10 V22 M25 12 V20 M11 16 H21"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M4 16 H7 M25 16 H28"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="2.2"
+        strokeLinecap="round"
       />
     </svg>
   );
