@@ -7,7 +7,6 @@ import {
   getStravaRunSummary,
   STRAVA_CONNECTION_COOKIE,
 } from "@/lib/strava";
-import type { StravaRunSummary } from "@/lib/strava";
 import { getWeatherSnapshot } from "@/lib/weather";
 import type { WeatherSnapshot } from "@/lib/weather";
 import {
@@ -43,6 +42,21 @@ type MetricIconName =
   | "clear"
   | "cloud";
 
+type TopRowIconName = "timer" | "calendar" | "rhr" | "running" | "vo2";
+
+type PostedHealthData = {
+  rhr: string | null;
+  vo2: string | null;
+};
+
+type TopRowData = {
+  id: string;
+  icon: TopRowIconName;
+  value: string | null;
+  subValue?: string | null;
+  muted?: boolean;
+};
+
 type MetricData = {
   id: string;
   value: string;
@@ -50,6 +64,7 @@ type MetricData = {
   graph?: number;
   hideDial?: boolean;
   subValue?: string | null;
+  direction?: number | null;
 };
 
 type TemperatureRangeData = {
@@ -67,14 +82,8 @@ type MoonPhaseData = {
 };
 
 type MoonPhaseAsset = {
-  id: string;
-  label: string;
   path: string;
-};
-
-type MoonPhaseImageData = MoonPhaseAsset & {
-  src: string | null;
-  illumination: number;
+  contentType: "image/png";
 };
 
 const SYNODIC_MONTH_DAYS = 29.530588853;
@@ -85,19 +94,27 @@ const UV_DIAL_COLOR = "#ff3b30";
 const TEMPERATURE_DIAL_MIN = -6;
 const TEMPERATURE_DIAL_MAX = 30;
 const TEMPERATURE_DIAL_SWEEP = 356;
-const MOON_PHASE_ASSET_VERSION = "hires-1024-20260623";
-const MOON_PHASE_ASSET_TIMEOUT_MS = 2500;
 const DEFAULT_WALLPAPER_TIME_ZONE = "Europe/Copenhagen";
-const MOON_PHASE_ASSETS: MoonPhaseAsset[] = [
-  { id: "new", label: "New moon", path: "/moon-phases/phase_new.png" },
-  { id: "waxing-crescent", label: "Waxing crescent", path: "/moon-phases/phase_waxing_crescent.png" },
-  { id: "first-quarter", label: "First quarter", path: "/moon-phases/phase_first_quarter.png" },
-  { id: "waxing-gibbous", label: "Waxing gibbous", path: "/moon-phases/phase_waxing_gibbous.png" },
-  { id: "full", label: "Full moon", path: "/moon-phases/phase_full.png" },
-  { id: "waning-gibbous", label: "Waning gibbous", path: "/moon-phases/phase_waning_gibbous.png" },
-  { id: "third-quarter", label: "Third quarter", path: "/moon-phases/phase_third_quarter.png" },
-  { id: "waning-crescent", label: "Waning crescent", path: "/moon-phases/phase_waning_crescent.png" },
-];
+const MAX_HEALTH_TEXT_LENGTH = 18;
+const MOON_PHASE_ASSET_VERSION = "hires-1024-20260624";
+const MOON_PHASE_ASSET_TIMEOUT_MS = 2500;
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10] as const;
+const EMPTY_POSTED_HEALTH_DATA: PostedHealthData = {
+  rhr: null,
+  vo2: null,
+};
+
+const MOON_PHASE_ASSETS = {
+  new: { path: "/moon-phases/phase_new.png", contentType: "image/png" },
+  waxingCrescent: { path: "/moon-phases/phase_waxing_crescent.png", contentType: "image/png" },
+  firstQuarter: { path: "/moon-phases/phase_first_quarter.png", contentType: "image/png" },
+  waxingGibbous: { path: "/moon-phases/phase_waxing_gibbous.png", contentType: "image/png" },
+  full: { path: "/moon-phases/phase_full.png", contentType: "image/png" },
+  waningGibbous: { path: "/moon-phases/phase_waning_gibbous.png", contentType: "image/png" },
+  thirdQuarter: { path: "/moon-phases/phase_third_quarter.png", contentType: "image/png" },
+  waningCrescent: { path: "/moon-phases/phase_waning_crescent.png", contentType: "image/png" },
+} satisfies Record<string, MoonPhaseAsset>;
+
 const moonPhaseImageCache = new Map<string, Promise<string | null>>();
 
 const THEMES: Record<WallpaperTheme, ThemeTokens> = {
@@ -134,6 +151,25 @@ const THEMES: Record<WallpaperTheme, ThemeTokens> = {
 };
 
 export async function GET(request: NextRequest) {
+  return safelyRenderWallpaper(request, EMPTY_POSTED_HEALTH_DATA);
+}
+
+export async function POST(request: NextRequest) {
+  const health = await readPostedHealthData(request);
+
+  return safelyRenderWallpaper(request, health);
+}
+
+async function safelyRenderWallpaper(request: NextRequest, health: PostedHealthData) {
+  try {
+    return await renderWallpaper(request, health);
+  } catch (error) {
+    console.error("Wallpaper render failed; using fallback wallpaper.", error);
+    return renderFallbackWallpaper(request);
+  }
+}
+
+async function renderWallpaper(request: NextRequest, health: PostedHealthData) {
   const searchParams = request.nextUrl.searchParams;
   const size = parseWallpaperSize(searchParams.get("size") ?? DISPLAY_CONFIG.wallpaperSize);
   const width = parseFiniteNumber(searchParams.get("width"), size.width, 720, 1800);
@@ -185,12 +221,13 @@ export async function GET(request: NextRequest) {
   const sunMarkerTop = moonCenterY - 48 * scale;
   const moonFrameSize = 318 * scale;
   const moonDiskSize = 226 * scale;
+  const moonImageUrl = await loadMoonPhaseImageSource(getMoonPhaseAsset(moonPhase.phase), request.nextUrl.origin);
   const metricSize = 210 * scale;
   const metricGap = 45 * scale;
-  const metricRowWidth = metricSize * 4 + metricGap * 3;
   const metricTop = height * 0.355 - displayLift;
   const topIconRowTop = height * 0.116 - 40 * scale;
   const topEdgeInset = width * 0.095;
+  const topPanelWidth = width * 0.285;
   const yearProgress = formatYearProgress(now);
   const dateStamp = formatDayMonth(nowDate);
   const sunriseTime = DISPLAY_CONFIG.sections.sunrise ? formatTime12h(weather.sunrise) : null;
@@ -198,6 +235,20 @@ export async function GET(request: NextRequest) {
   const stravaCookieValue = request.cookies.get(STRAVA_CONNECTION_COOKIE)?.value;
   const stravaConnection = decodeStravaConnection(stravaCookieValue);
   const stravaSummary = await safelyGetStravaRunSummary(nowDate, stravaConnection);
+  const leftRows: TopRowData[] = [
+    { id: "year", icon: "timer", value: yearProgress },
+    { id: "date", icon: "calendar", value: dateStamp, muted: true },
+    { id: "rhr", icon: "rhr", value: health.rhr },
+  ];
+  const rightRows: TopRowData[] = [
+    {
+      id: "run",
+      icon: "running",
+      value: formatStravaDistance(stravaSummary?.lastWeekDistanceKm ?? null),
+      subValue: formatStravaDistance(stravaSummary?.lastFourWeeksDistanceKm ?? null),
+    },
+    { id: "vo2", icon: "vo2", value: health.vo2 },
+  ];
   const temperatureRange: TemperatureRangeData | null =
     DISPLAY_CONFIG.sections.weatherToday.high || DISPLAY_CONFIG.sections.weatherToday.low
       ? {
@@ -214,7 +265,7 @@ export async function GET(request: NextRequest) {
         }
       : null;
   const weatherMetricItems: Array<MetricData | null> = [
-    DISPLAY_CONFIG.sections.weatherToday.rainChance
+    DISPLAY_CONFIG.sections.weatherToday.rainChance && !isRoundedZero(weather.rainChance)
       ? {
           id: "rain",
           value: formatPercent(weather.rainChance),
@@ -230,7 +281,7 @@ export async function GET(request: NextRequest) {
           value: formatWind(weather.windMax, weather.windUnitLabel),
           icon: "wind",
           graph: normalizeWind(weather.windMax),
-          subValue: formatWindDirection(weather.windDirection),
+          direction: normalizeWindDirectionAngle(weather.windDirection),
         }
       : null,
     DISPLAY_CONFIG.sections.weatherToday.uvMax
@@ -246,7 +297,8 @@ export async function GET(request: NextRequest) {
   const rainMetric = weatherMetrics.find((metric) => metric.id === "rain");
   const windMetric = weatherMetrics.find((metric) => metric.id === "wind");
   const uvMetric = weatherMetrics.find((metric) => metric.id === "uv");
-  const moonPhaseImage = await moonPhaseImagePromise;
+  const metricCount = [rainMetric, windMetric, temperatureRange, uvMetric].filter(Boolean).length;
+  const metricRowWidth = metricCount > 0 ? metricSize * metricCount + metricGap * (metricCount - 1) : 0;
   const headers: Record<string, string> = {
     "cache-control": "private, no-store",
   };
@@ -272,21 +324,23 @@ export async function GET(request: NextRequest) {
       >
         <StarryBackdrop width={width} height={height} theme={theme} />
 
-        <CalendarProgress
-          value={yearProgress}
-          date={dateStamp}
+        <TopDataPanel
+          rows={leftRows}
           theme={theme}
           left={topEdgeInset}
           top={topIconRowTop}
+          width={topPanelWidth}
+          align="left"
           scale={scale}
         />
 
-        <RunningSummary
-          summary={stravaSummary}
+        <TopDataPanel
+          rows={rightRows}
           theme={theme}
-          left={width - topEdgeInset - width * 0.135}
+          left={width - topEdgeInset - topPanelWidth}
           top={topIconRowTop}
-          width={width * 0.135}
+          width={topPanelWidth}
+          align="right"
           scale={scale}
         />
 
@@ -323,7 +377,7 @@ export async function GET(request: NextRequest) {
             justifyContent: "center",
           }}
         >
-          <MoonPhase image={moonPhaseImage} size={moonDiskSize} />
+          <MoonPhase phase={moonPhase} imageUrl={moonImageUrl} size={moonDiskSize} />
         </div>
 
         <div
@@ -352,6 +406,66 @@ export async function GET(request: NextRequest) {
   );
 }
 
+function renderFallbackWallpaper(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const size = parseWallpaperSize(searchParams.get("size") ?? DISPLAY_CONFIG.wallpaperSize);
+  const width = parseFiniteNumber(searchParams.get("width"), size.width, 720, 1800);
+  const height = parseFiniteNumber(searchParams.get("height"), size.height, 1280, 3600);
+  const themeName = sanitizeTheme(searchParams.get("theme") ?? DISPLAY_CONFIG.theme);
+  const theme = THEMES[themeName];
+  const scale = width / 1179;
+  const dateStamp = formatDayMonth(new Date()) ?? "Today";
+
+  return new ImageResponse(
+    (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          position: "relative",
+          overflow: "hidden",
+          alignItems: "center",
+          justifyContent: "center",
+          background: theme.background,
+          color: theme.ink,
+          fontFamily: "Helvetica Neue, Arial, Helvetica, sans-serif",
+        }}
+      >
+        <StarryBackdrop width={width} height={height} theme={theme} />
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 18 * scale,
+          }}
+        >
+          <CalendarIcon theme={theme} size={58 * scale} />
+          <span
+            style={{
+              color: theme.ink,
+              fontSize: 44 * scale,
+              fontWeight: 500,
+              lineHeight: 1,
+              letterSpacing: 0,
+            }}
+          >
+            {dateStamp}
+          </span>
+        </div>
+      </div>
+    ),
+    {
+      width,
+      height,
+      headers: {
+        "cache-control": "private, no-store",
+      },
+    },
+  );
+}
+
 function serializeStravaCookie(value: string, secure: boolean) {
   return [
     `${STRAVA_CONNECTION_COOKIE}=${value}`,
@@ -363,6 +477,43 @@ function serializeStravaCookie(value: string, secure: boolean) {
   ]
     .filter(Boolean)
     .join("; ");
+}
+
+async function readPostedHealthData(request: NextRequest): Promise<PostedHealthData> {
+  try {
+    return parsePostedHealthData(await request.json());
+  } catch {
+    return EMPTY_POSTED_HEALTH_DATA;
+  }
+}
+
+function parsePostedHealthData(value: unknown): PostedHealthData {
+  if (!isRecord(value)) {
+    return EMPTY_POSTED_HEALTH_DATA;
+  }
+
+  return {
+    rhr: readHealthText(value.RHR),
+    vo2: readHealthText(value.Vo2),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readHealthText(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim().replace(/\s+/gu, " ");
+
+  if (!normalized) {
+    return null;
+  }
+
+  return normalized.slice(0, MAX_HEALTH_TEXT_LENGTH);
 }
 
 function StarryBackdrop({ width, height, theme }: { width: number; height: number; theme: ThemeTokens }) {
@@ -451,85 +602,29 @@ function hashUnit(index: number, salt: number) {
   return value - Math.floor(value);
 }
 
-function CalendarProgress({
-  value,
-  date,
-  theme,
-  left,
-  top,
-  scale,
-}: {
-  value: string;
-  date: string;
-  theme: ThemeTokens;
-  left: number;
-  top: number;
-  scale: number;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        position: "absolute",
-        left,
-        top,
-        flexDirection: "column",
-        alignItems: "flex-start",
-        gap: 10 * scale,
-        color: "#ffffff",
-      }}
-    >
-      <CalendarIcon theme={theme} size={28 * scale} />
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "flex-start",
-          gap: 5 * scale,
-        }}
-      >
-        <span
-          style={{
-            color: "#ffffff",
-            fontSize: 30 * scale,
-            fontWeight: 500,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          {value}
-        </span>
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: 21 * scale,
-            fontWeight: 400,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          {date}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function RunningSummary({
-  summary,
+function TopDataPanel({
+  rows,
   theme,
   left,
   top,
   width,
+  align,
   scale,
 }: {
-  summary: StravaRunSummary | null;
+  rows: TopRowData[];
   theme: ThemeTokens;
   left: number;
   top: number;
   width: number;
+  align: "left" | "right";
   scale: number;
 }) {
+  const visibleRows = rows.filter((row) => Boolean(row.value || row.subValue));
+
+  if (visibleRows.length === 0) {
+    return null;
+  }
+
   return (
     <div
       style={{
@@ -539,44 +634,123 @@ function RunningSummary({
         top,
         width,
         flexDirection: "column",
-        alignItems: "flex-end",
-        gap: 9 * scale,
-        color: theme.ink,
+        alignItems: align === "right" ? "flex-end" : "flex-start",
+        gap: 12 * scale,
+        color: "#ffffff",
       }}
     >
-      <RunningIcon theme={theme} size={40 * scale} />
+      {visibleRows.map((row) => (
+        <TopDataRow key={row.id} row={row} theme={theme} align={align} scale={scale} />
+      ))}
+    </div>
+  );
+}
+
+function TopDataRow({
+  row,
+  theme,
+  align,
+  scale,
+}: {
+  row: TopRowData;
+  theme: ThemeTokens;
+  align: "left" | "right";
+  scale: number;
+}) {
+  const primaryValue = row.value ?? row.subValue;
+
+  if (!primaryValue) {
+    return null;
+  }
+
+  const valueFontSize = primaryValue.length > 12 ? 22 * scale : 27 * scale;
+  const subValueFontSize = row.subValue && row.subValue.length > 12 ? 20 * scale : 23 * scale;
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        width: "100%",
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: align === "right" ? "flex-end" : "flex-start",
+        gap: 11 * scale,
+      }}
+    >
+      <TopRowIcon icon={row.icon} theme={theme} size={31 * scale} />
       <div
         style={{
           display: "flex",
           flexDirection: "column",
-          alignItems: "flex-end",
+          alignItems: align === "right" ? "flex-end" : "flex-start",
           gap: 5 * scale,
         }}
       >
-        <span
-          style={{
-            color: "#ffffff",
-            fontSize: 24 * scale,
-            fontWeight: 500,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          {formatStravaDistance(summary?.lastWeekDistanceKm ?? null)}
-        </span>
-        <span
-          style={{
-            color: theme.muted,
-            fontSize: 21 * scale,
-            fontWeight: 400,
-            lineHeight: 1,
-            letterSpacing: 0,
-          }}
-        >
-          {formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null)}
-        </span>
+        {row.value ? (
+          <span
+            style={{
+              color: row.muted ? theme.muted : "#ffffff",
+              fontSize: valueFontSize,
+              fontWeight: row.muted ? 400 : 500,
+              lineHeight: 1,
+              letterSpacing: 0,
+              textAlign: align,
+            }}
+          >
+            {row.value}
+          </span>
+        ) : null}
+        {row.subValue ? (
+          <span
+            style={{
+              color: theme.muted,
+              fontSize: subValueFontSize,
+              fontWeight: 400,
+              lineHeight: 1,
+              letterSpacing: 0,
+              textAlign: align,
+            }}
+          >
+            {row.subValue}
+          </span>
+        ) : null}
       </div>
     </div>
+  );
+}
+
+function TopRowIcon({ icon, theme, size }: { icon: TopRowIconName; theme: ThemeTokens; size: number }) {
+  if (icon === "timer") {
+    return <TimerIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "calendar") {
+    return <CalendarIcon theme={theme} size={size} />;
+  }
+
+  if (icon === "running") {
+    return <RunningIcon theme={theme} size={size} />;
+  }
+
+  return <HeartIcon theme={theme} size={size} variant={icon === "vo2" ? "capacity" : "resting"} />;
+}
+
+function TimerIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d="M13 4 H19 M16 4 V7 M22.5 8.5 L24.5 6.5"
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.84"
+      />
+      <circle cx="16" cy="18" r="10" fill="none" stroke={theme.ink} strokeWidth="2" opacity="0.9" />
+      <path d="M16 12 V18 L20 21" fill="none" stroke={theme.accent} strokeWidth="2.2" strokeLinecap="round" />
+      <path d="M16 8 A10 10 0 0 1 26 18" fill="none" stroke={theme.accent} strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -599,6 +773,67 @@ function CalendarIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
         strokeWidth="2"
         strokeLinecap="round"
         opacity="0.58"
+      />
+    </svg>
+  );
+}
+
+function HeartIcon({
+  theme,
+  size,
+  variant,
+}: {
+  theme: ThemeTokens;
+  size: number;
+  variant: "resting" | "capacity";
+}) {
+  const heartPath =
+    "M16 27 C9.5 21.6 5 17.7 5 12.5 C5 9.4 7.4 7 10.5 7 C12.5 7 14.3 8 16 10 C17.7 8 19.5 7 21.5 7 C24.6 7 27 9.4 27 12.5 C27 17.7 22.5 21.6 16 27 Z";
+
+  if (variant === "capacity") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+        <path
+          d={heartPath}
+          fill="none"
+          stroke={theme.ink}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          opacity="0.9"
+        />
+        <circle cx="22.5" cy="7.5" r="2" fill="none" stroke={theme.accent} strokeWidth="1.8" />
+        <circle cx="26.5" cy="4.5" r="1.35" fill="none" stroke={theme.accent} strokeWidth="1.6" opacity="0.82" />
+        <path
+          d="M12 16 C13.8 13.4 18.2 13.4 20 16 M13.5 19 C15 17.4 17 17.4 18.5 19"
+          fill="none"
+          stroke={theme.accent}
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          opacity="0.9"
+        />
+      </svg>
+    );
+  }
+
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <path
+        d={heartPath}
+        fill="none"
+        stroke={theme.ink}
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.9"
+      />
+      <path
+        d="M8 17 H12 L14 13 L17 21 L19.5 16 H24"
+        fill="none"
+        stroke={theme.accent}
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -693,7 +928,8 @@ function MetricDial({
   scale: number;
 }) {
   const valueFontSize = metric.id === "wind" ? 35 * scale : 49 * scale;
-  const hasSubValue = Boolean(metric.subValue);
+  const hasWindDirection = metric.id === "wind" && typeof metric.direction === "number";
+  const hasSupplement = Boolean(metric.subValue) || hasWindDirection;
   const dialColor = getMetricDialColor(metric.id, theme);
 
   return (
@@ -720,7 +956,7 @@ function MetricDial({
           position: "absolute",
           left: 0,
           right: 0,
-          top: hasSubValue ? size * 0.49 : size * 0.54,
+          top: hasSupplement ? size * 0.49 : size * 0.54,
           justifyContent: "center",
         }}
       >
@@ -728,7 +964,7 @@ function MetricDial({
           {metric.value}
         </span>
       </div>
-      {hasSubValue ? (
+      {hasSupplement ? (
         <div
           style={{
             display: "flex",
@@ -741,26 +977,39 @@ function MetricDial({
             gap: 8 * scale,
           }}
         >
-          {metric.id === "wind" ? <DirectionGlyph theme={theme} size={17 * scale} /> : null}
-          <span style={{ color: theme.accent, fontSize: 23 * scale, fontWeight: 300, lineHeight: 1 }}>
-            {metric.subValue}
-          </span>
+          {hasWindDirection ? (
+            <DirectionGlyph theme={theme} size={33 * scale} direction={metric.direction ?? 0} />
+          ) : null}
+          {metric.subValue ? (
+            <span style={{ color: theme.accent, fontSize: 23 * scale, fontWeight: 300, lineHeight: 1 }}>
+              {metric.subValue}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-function DirectionGlyph({ theme, size }: { theme: ThemeTokens; size: number }) {
+function DirectionGlyph({
+  theme,
+  size,
+  direction,
+}: {
+  theme: ThemeTokens;
+  size: number;
+  direction: number;
+}) {
   return (
-    <svg width={size} height={size} viewBox="0 0 20 20" style={{ display: "block" }}>
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
       <path
-        d="M3 3 L17 9 L10 11 L8 18 Z"
+        d="M16 4 L25 28 L16 23 L7 28 Z"
         fill="none"
         stroke={theme.accent}
-        strokeWidth="2"
+        strokeWidth="2.4"
         strokeLinejoin="round"
         strokeLinecap="round"
+        transform={`rotate(${direction} 16 16)`}
       />
     </svg>
   );
@@ -1149,36 +1398,26 @@ function formatYearProgress(timestamp: number) {
   return `${Math.max(0, Math.min(100, progress)).toFixed(1)}%`;
 }
 
-function formatDayMonth(date: Date) {
-  const timeZone =
-    process.env.WALLPAPER_TIME_ZONE?.trim() || process.env.STRAVA_TIME_ZONE?.trim() || DEFAULT_WALLPAPER_TIME_ZONE;
-
-  return (
-    formatDayMonthInTimeZone(date, timeZone) ??
-    formatDayMonthInTimeZone(date, DEFAULT_WALLPAPER_TIME_ZONE) ??
-    "--/--"
-  );
-}
-
-function formatDayMonthInTimeZone(date: Date, timeZone: string) {
-  try {
-    const parts = new Intl.DateTimeFormat("en-GB", {
-      day: "2-digit",
-      month: "2-digit",
-      timeZone,
-    }).formatToParts(date);
-    const day = parts.find((part) => part.type === "day")?.value ?? "--";
-    const month = parts.find((part) => part.type === "month")?.value ?? "--";
-
-    return `${day}/${month}`;
-  } catch {
+function formatDayMonth(value: Date) {
+  if (!Number.isFinite(value.getTime())) {
     return null;
+  }
+
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      day: "numeric",
+      month: "short",
+      timeZone: DEFAULT_WALLPAPER_TIME_ZONE,
+    }).format(value);
+  } catch {
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return `${value.getUTCDate()} ${months[value.getUTCMonth()]}`;
   }
 }
 
 function formatStravaDistance(value: number | null) {
   if (value === null) {
-    return "-- km";
+    return null;
   }
 
   if (value >= 100) {
@@ -1231,15 +1470,16 @@ function formatWind(value: number | null, unit: string) {
   return value === null ? "--" : `${Math.round(value)} ${unit}`;
 }
 
-function formatWindDirection(value: number | null) {
+function isRoundedZero(value: number | null) {
+  return value !== null && Math.round(value) <= 0;
+}
+
+function normalizeWindDirectionAngle(value: number | null) {
   if (value === null) {
     return null;
   }
 
-  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  const index = Math.round((((value % 360) + 360) % 360) / 45) % directions.length;
-
-  return directions[index];
+  return positiveModulo(value, 360);
 }
 
 function formatUv(value: number | null) {
@@ -1261,59 +1501,96 @@ function positiveModulo(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
-async function getMoonPhaseImage(phase: MoonPhaseData, origin: string): Promise<MoonPhaseImageData> {
-  const asset = getMoonPhaseAsset(phase.phase);
-  const src = await loadMoonPhaseImageSource(asset, origin);
+function getMoonPhaseAsset(phase: number): MoonPhaseAsset {
+  const normalized = positiveModulo(phase, 1);
 
-  return {
-    ...asset,
-    src,
-    illumination: phase.illumination,
-  };
+  if (normalized < 1 / 16 || normalized >= 15 / 16) {
+    return MOON_PHASE_ASSETS.new;
+  }
+
+  if (normalized < 3 / 16) {
+    return MOON_PHASE_ASSETS.waxingCrescent;
+  }
+
+  if (normalized < 5 / 16) {
+    return MOON_PHASE_ASSETS.firstQuarter;
+  }
+
+  if (normalized < 7 / 16) {
+    return MOON_PHASE_ASSETS.waxingGibbous;
+  }
+
+  if (normalized < 9 / 16) {
+    return MOON_PHASE_ASSETS.full;
+  }
+
+  if (normalized < 11 / 16) {
+    return MOON_PHASE_ASSETS.waningGibbous;
+  }
+
+  if (normalized < 13 / 16) {
+    return MOON_PHASE_ASSETS.thirdQuarter;
+  }
+
+  return MOON_PHASE_ASSETS.waningCrescent;
 }
 
-function getMoonPhaseAsset(phase: number) {
-  const normalizedPhase = positiveModulo(phase, 1);
-  const assetIndex = Math.round(normalizedPhase * MOON_PHASE_ASSETS.length) % MOON_PHASE_ASSETS.length;
-
-  return MOON_PHASE_ASSETS[assetIndex];
-}
-
-function loadMoonPhaseImageSource(asset: MoonPhaseAsset, origin: string) {
-  const url = new URL(asset.path, origin);
-  url.searchParams.set("v", MOON_PHASE_ASSET_VERSION);
-
-  const cacheKey = url.toString();
+async function loadMoonPhaseImageSource(asset: MoonPhaseAsset, origin: string) {
+  const cacheKey = `${asset.path}?v=${MOON_PHASE_ASSET_VERSION}`;
   const cached = moonPhaseImageCache.get(cacheKey);
 
   if (cached) {
     return cached;
   }
 
-  const loaded = fetch(cacheKey, {
+  const imageSourcePromise = fetchMoonPhaseImageSource(asset, origin).catch((error: unknown) => {
+    console.error("Moon phase asset failed to load.", error);
+    return null;
+  });
+
+  moonPhaseImageCache.set(cacheKey, imageSourcePromise);
+
+  const imageSource = await imageSourcePromise;
+
+  if (!imageSource) {
+    moonPhaseImageCache.delete(cacheKey);
+  }
+
+  return imageSource;
+}
+
+async function fetchMoonPhaseImageSource(asset: MoonPhaseAsset, origin: string) {
+  const assetUrl = new URL(asset.path, origin);
+  assetUrl.searchParams.set("v", MOON_PHASE_ASSET_VERSION);
+
+  const response = await fetch(assetUrl, {
     cache: "force-cache",
     signal: moonPhaseAssetSignal(),
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`Moon phase asset failed with ${response.status}`);
-      }
+  });
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
 
-      const contentType = response.headers.get("content-type") ?? "image/png";
-      const buffer = await response.arrayBuffer();
+  if (!response.ok) {
+    throw new Error(`Moon asset ${asset.path} returned HTTP ${response.status} with ${contentType || "unknown content type"}.`);
+  }
 
-      return `data:${contentType};base64,${arrayBufferToBase64(buffer)}`;
-    })
-    .catch(() => null);
+  if (contentType !== asset.contentType) {
+    throw new Error(`Moon asset ${asset.path} returned ${contentType || "unknown content type"} instead of ${asset.contentType}.`);
+  }
 
-  moonPhaseImageCache.set(cacheKey, loaded);
+  const imageBuffer = await response.arrayBuffer();
 
-  return loaded;
+  if (!isPngArrayBuffer(imageBuffer)) {
+    throw new Error(`Moon asset ${asset.path} did not contain a valid PNG signature.`);
+  }
+
+  return `data:${asset.contentType};base64,${arrayBufferToBase64(imageBuffer)}`;
 }
 
 function moonPhaseAssetSignal() {
-  if (typeof AbortSignal.timeout === "function") {
-    return AbortSignal.timeout(MOON_PHASE_ASSET_TIMEOUT_MS);
+  const abortSignal = AbortSignal as typeof AbortSignal & { timeout?: (milliseconds: number) => AbortSignal };
+
+  if (abortSignal.timeout) {
+    return abortSignal.timeout(MOON_PHASE_ASSET_TIMEOUT_MS);
   }
 
   const controller = new AbortController();
@@ -1322,19 +1599,30 @@ function moonPhaseAssetSignal() {
   return controller.signal;
 }
 
+function isPngArrayBuffer(buffer: ArrayBuffer) {
+  if (buffer.byteLength < PNG_SIGNATURE.length) {
+    return false;
+  }
+
+  const bytes = new Uint8Array(buffer, 0, PNG_SIGNATURE.length);
+
+  return PNG_SIGNATURE.every((value, index) => bytes[index] === value);
+}
+
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
   const chunkSize = 0x8000;
-  let binary = "";
+  const chunks: string[] = [];
 
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const end = Math.min(offset + chunkSize, bytes.length);
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, end)));
   }
 
-  return btoa(binary);
+  return btoa(chunks.join(""));
 }
 
-function MoonPhase({ image, size }: { image: MoonPhaseImageData; size: number }) {
+function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: string | null; size: number }) {
   const frameSize = size + 92;
   const illumination = Math.round(image.illumination * 100);
 
@@ -1361,16 +1649,18 @@ function MoonPhase({ image, size }: { image: MoonPhaseImageData; size: number })
           justifyContent: "center",
         }}
       >
-        {image.src ? (
+        {imageUrl ? (
           <img
-            src={image.src}
+            alt={`Moon phase ${illumination}% illuminated`}
+            src={imageUrl}
             width={size}
             height={size}
-            alt={`${image.label}, ${illumination}% illuminated`}
             style={{
               display: "block",
               width: size,
               height: size,
+              objectFit: "cover",
+              borderRadius: 999,
             }}
           />
         ) : (
@@ -1380,10 +1670,8 @@ function MoonPhase({ image, size }: { image: MoonPhaseImageData; size: number })
               width: size,
               height: size,
               borderRadius: 999,
-              background: "#020202",
-              borderColor: "rgba(255, 255, 255, 0.18)",
-              borderStyle: "solid",
-              borderWidth: 1,
+              background: "#050505",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
             }}
           />
         )}
