@@ -87,6 +87,7 @@ const TEMPERATURE_DIAL_MAX = 30;
 const TEMPERATURE_DIAL_SWEEP = 356;
 const MOON_PHASE_ASSET_VERSION = "hires-1024-20260623";
 const MOON_PHASE_ASSET_TIMEOUT_MS = 2500;
+const DEFAULT_WALLPAPER_TIME_ZONE = "Europe/Copenhagen";
 const MOON_PHASE_ASSETS: MoonPhaseAsset[] = [
   { id: "new", label: "New moon", path: "/moon-phases/phase_new.png" },
   { id: "waxing-crescent", label: "Waxing crescent", path: "/moon-phases/phase_waxing_crescent.png" },
@@ -191,6 +192,7 @@ export async function GET(request: NextRequest) {
   const topIconRowTop = height * 0.116 - 40 * scale;
   const topEdgeInset = width * 0.095;
   const yearProgress = formatYearProgress(now);
+  const dateStamp = formatDayMonth(nowDate);
   const sunriseTime = DISPLAY_CONFIG.sections.sunrise ? formatTime12h(weather.sunrise) : null;
   const sunsetTime = DISPLAY_CONFIG.sections.sunset ? formatTime12h(weather.sunset) : null;
   const stravaCookieValue = request.cookies.get(STRAVA_CONNECTION_COOKIE)?.value;
@@ -270,7 +272,14 @@ export async function GET(request: NextRequest) {
       >
         <StarryBackdrop width={width} height={height} theme={theme} />
 
-        <CalendarProgress value={yearProgress} theme={theme} left={topEdgeInset} top={topIconRowTop} scale={scale} />
+        <CalendarProgress
+          value={yearProgress}
+          date={dateStamp}
+          theme={theme}
+          left={topEdgeInset}
+          top={topIconRowTop}
+          scale={scale}
+        />
 
         <RunningSummary
           summary={stravaSummary}
@@ -444,12 +453,14 @@ function hashUnit(index: number, salt: number) {
 
 function CalendarProgress({
   value,
+  date,
   theme,
   left,
   top,
   scale,
 }: {
   value: string;
+  date: string;
   theme: ThemeTokens;
   left: number;
   top: number;
@@ -469,17 +480,37 @@ function CalendarProgress({
       }}
     >
       <CalendarIcon theme={theme} size={28 * scale} />
-      <span
+      <div
         style={{
-          color: "#ffffff",
-          fontSize: 30 * scale,
-          fontWeight: 500,
-          lineHeight: 1,
-          letterSpacing: 0,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "flex-start",
+          gap: 5 * scale,
         }}
       >
-        {value}
-      </span>
+        <span
+          style={{
+            color: "#ffffff",
+            fontSize: 30 * scale,
+            fontWeight: 500,
+            lineHeight: 1,
+            letterSpacing: 0,
+          }}
+        >
+          {value}
+        </span>
+        <span
+          style={{
+            color: theme.muted,
+            fontSize: 21 * scale,
+            fontWeight: 400,
+            lineHeight: 1,
+            letterSpacing: 0,
+          }}
+        >
+          {date}
+        </span>
+      </div>
     </div>
   );
 }
@@ -1116,6 +1147,33 @@ function formatYearProgress(timestamp: number) {
   const progress = ((timestamp - yearStart) / (nextYearStart - yearStart)) * 100;
 
   return `${Math.max(0, Math.min(100, progress)).toFixed(1)}%`;
+}
+
+function formatDayMonth(date: Date) {
+  const timeZone =
+    process.env.WALLPAPER_TIME_ZONE?.trim() || process.env.STRAVA_TIME_ZONE?.trim() || DEFAULT_WALLPAPER_TIME_ZONE;
+
+  return (
+    formatDayMonthInTimeZone(date, timeZone) ??
+    formatDayMonthInTimeZone(date, DEFAULT_WALLPAPER_TIME_ZONE) ??
+    "--/--"
+  );
+}
+
+function formatDayMonthInTimeZone(date: Date, timeZone: string) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      day: "2-digit",
+      month: "2-digit",
+      timeZone,
+    }).formatToParts(date);
+    const day = parts.find((part) => part.type === "day")?.value ?? "--";
+    const month = parts.find((part) => part.type === "month")?.value ?? "--";
+
+    return `${day}/${month}`;
+  } catch {
+    return null;
+  }
 }
 
 function formatStravaDistance(value: number | null) {

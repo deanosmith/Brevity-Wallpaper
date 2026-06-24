@@ -371,16 +371,12 @@ export function WallpaperStudio() {
                     {stravaStatus?.source === "browser"
                       ? "OAuth is connected for previews and downloads in this browser."
                       : stravaStatus?.source === "environment"
-                        ? "Using STRAVA_* environment values for the wallpaper."
-                        : "Connect once to authorize running activity access."}
+                        ? "Using STRAVA_* environment values for the wallpaper and Shortcuts."
+                        : "Connect for browser previews, or use STRAVA_REFRESH_TOKEN for Shortcuts."}
                   </p>
                 </div>
                 <div className="actions">
-                  <a
-                    className={stravaStatus?.oauthConfigured === false ? "button disabled" : "button primary"}
-                    href={stravaStatus?.oauthConfigured === false ? undefined : "/api/strava/connect"}
-                    aria-disabled={stravaStatus?.oauthConfigured === false}
-                  >
+                  <a className="button primary" href="/api/strava/connect">
                     {stravaStatus?.connected ? "Reconnect" : "Connect"}
                   </a>
                   <button
