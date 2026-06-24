@@ -213,7 +213,6 @@ async function renderWallpaper(request: NextRequest, health: PostedHealthData) {
   const now = Date.now();
   const nowDate = new Date(now);
   const moonPhase = getMoonPhase(now);
-  const moonPhaseImagePromise = getMoonPhaseImage(moonPhase, request.nextUrl.origin);
   const scale = width / 1179;
   const centerX = width / 2;
   const displayLift = height * 0.08;
@@ -265,7 +264,7 @@ async function renderWallpaper(request: NextRequest, health: PostedHealthData) {
         }
       : null;
   const weatherMetricItems: Array<MetricData | null> = [
-    DISPLAY_CONFIG.sections.weatherToday.rainChance && !isRoundedZero(weather.rainChance)
+    DISPLAY_CONFIG.sections.weatherToday.rainChance
       ? {
           id: "rain",
           value: formatPercent(weather.rainChance),
@@ -1360,10 +1359,6 @@ function normalizeRatio(value: number | null, min: number, max: number) {
   return Math.min(1, Math.max(0, (value - min) / (max - min)));
 }
 
-function isRoundedZero(value: number | null) {
-  return value !== null && Math.round(value) === 0;
-}
-
 async function safelyGetStravaRunSummary(now: Date, stravaConnection: ReturnType<typeof decodeStravaConnection>) {
   try {
     return await getStravaRunSummary(now, stravaConnection);
@@ -1624,7 +1619,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
 
 function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: string | null; size: number }) {
   const frameSize = size + 92;
-  const illumination = Math.round(image.illumination * 100);
+  const illumination = Math.round(phase.illumination * 100);
 
   return (
     <div
