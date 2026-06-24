@@ -11,17 +11,6 @@ Create a Shortcut with:
 
 For a daily wallpaper, run that Shortcut from a personal automation.
 
-To include health values from Shortcuts, set `Get Contents of URL` to `POST` and send a JSON body with string values:
-
-```json
-{
-  "RHR": "48",
-  "Vo2": "57"
-}
-```
-
-Missing, empty, malformed, or non-string health values are omitted from the wallpaper instead of showing an error or placeholder.
-
 ## iPhone 15 Demo
 
 <img width="299" height="639" alt="image" src="https://github.com/user-attachments/assets/3a99047d-5b10-41bc-a204-cce31a31e9ca" />
