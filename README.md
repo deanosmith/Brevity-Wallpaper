@@ -12,9 +12,7 @@ Create a Shortcut with:
 ```json
 {
   "RHR": "52",
-  "Vo2": "48",
-  "Cycle": "Day 12",
-  "Ex": "45 min"
+  "Vo2": "48"
 }
 ```
 
@@ -35,7 +33,6 @@ For a daily wallpaper, run that Shortcut from a personal automation.
 - Sunrise
 - Sunset
 - Moon phase for the generation time
-- Strava running distance for the last complete week and last four complete weeks
 
 ## Strava Environment Variables
 
@@ -46,7 +43,7 @@ Required for the Connect Strava button:
 - `STRAVA_CLIENT_ID`
 - `STRAVA_CLIENT_SECRET`
 
-Optional server-side tokens for the wallpaper route and iOS Shortcuts:
+Optional server-side tokens for future running metrics:
 
 - `STRAVA_REFRESH_TOKEN`
 - `STRAVA_ACCESS_TOKEN`
@@ -63,6 +60,6 @@ The app requests `activity:read_all` by default so private runs can be included.
 Strava can rotate refresh tokens after a refresh, so for long-running server-side use, keep `STRAVA_REFRESH_TOKEN` current in Vercel.
 In the Strava developer settings, set the authorization callback domain to your deployed host. Localhost and `127.0.0.1` are allowed for local development.
 
-The Connect Strava button stores an OAuth connection in the current browser. iOS Shortcuts `Get Contents of URL` does not use that browser session, so automatic wallpaper updates need the server-side `STRAVA_*` environment values in Vercel if you want running metrics in the PNG route.
+The current wallpaper layout does not render Strava metrics. The Connect Strava button and server-side token settings are retained for future running-metric work.
 
 `Feel free to fork and customise`

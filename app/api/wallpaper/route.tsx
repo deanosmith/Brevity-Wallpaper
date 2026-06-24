@@ -1,13 +1,6 @@
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
 import { DISPLAY_CONFIG } from "@/lib/display-config";
-import {
-  decodeStravaConnection,
-  encodeStravaConnection,
-  getStravaRunSummary,
-  STRAVA_CONNECTION_COOKIE,
-} from "@/lib/strava";
-import type { StravaRunSummary } from "@/lib/strava";
 import { getWeatherSnapshot } from "@/lib/weather";
 import type { WeatherSnapshot } from "@/lib/weather";
 import {
@@ -47,19 +40,16 @@ type SummaryIconName =
   | "timer"
   | "calendar"
   | "heart-rate"
-  | "running-week"
-  | "running-month"
-  | "heart-oxygen"
-  | "cycle"
-  | "exercise";
+  | "heart-oxygen";
 
 type MetricData = {
   id: string;
   value: string;
   icon: MetricIconName;
   graph?: number;
-  hideDial?: boolean;
+  hideDialProgress?: boolean;
   subValue?: string | null;
+  direction?: number | null;
 };
 
 type TemperatureRangeData = {
@@ -90,13 +80,10 @@ type MoonPhaseImageData = MoonPhaseAsset & {
 type HealthMetrics = {
   rhr: string | null;
   vo2: string | null;
-  cycle: string | null;
-  exercise: string | null;
 };
 
 const SYNODIC_MONTH_DAYS = 29.530588853;
 const KNOWN_NEW_MOON_UTC = Date.UTC(2000, 0, 6, 18, 14);
-const SIX_MONTHS_SECONDS = 60 * 60 * 24 * 180;
 const RAIN_DIAL_COLOR = "#2f9bff";
 const UV_DIAL_COLOR = "#ff3b30";
 const TEMPERATURE_DIAL_MIN = -6;
@@ -109,8 +96,6 @@ const HEALTH_METRIC_MAX_LENGTH = 18;
 const EMPTY_HEALTH_METRICS: HealthMetrics = {
   rhr: null,
   vo2: null,
-  cycle: null,
-  exercise: null,
 };
 const MOON_PHASE_ASSETS: MoonPhaseAsset[] = [
   { id: "new", label: "New moon", path: "/moon-phases/phase_new.png" },
@@ -230,9 +215,6 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
   const sunriseTime = DISPLAY_CONFIG.sections.sunrise ? formatTime12h(weather.sunrise) : null;
   const sunsetTime = DISPLAY_CONFIG.sections.sunset ? formatTime12h(weather.sunset) : null;
   const moonPhaseImagePromise = getMoonPhaseImage(moonPhase, request.nextUrl.origin);
-  const stravaCookieValue = request.cookies.get(STRAVA_CONNECTION_COOKIE)?.value;
-  const stravaConnection = decodeStravaConnection(stravaCookieValue);
-  const stravaSummary = await safelyGetStravaRunSummary(nowDate, stravaConnection);
   const temperatureRange: TemperatureRangeData | null =
     DISPLAY_CONFIG.sections.weatherToday.high || DISPLAY_CONFIG.sections.weatherToday.low
       ? {
@@ -255,7 +237,7 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
           value: formatPercent(weather.rainChance),
           icon: "rain",
           graph: normalizePercent(weather.rainChance),
-          hideDial: isRoundedZero(weather.rainChance),
+          hideDialProgress: isRoundedZero(weather.rainChance),
           subValue: formatRainPeakTime(weather.rainChance, weather.rainPeakTime),
         }
       : null,
@@ -265,7 +247,7 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
           value: formatWind(weather.windMax, weather.windUnitLabel),
           icon: "wind",
           graph: normalizeWind(weather.windMax),
-          subValue: formatWindDirection(weather.windDirection),
+          direction: weather.windDirection,
         }
       : null,
     DISPLAY_CONFIG.sections.weatherToday.uvMax
@@ -281,15 +263,10 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
   const rainMetric = weatherMetrics.find((metric) => metric.id === "rain");
   const windMetric = weatherMetrics.find((metric) => metric.id === "wind");
   const uvMetric = weatherMetrics.find((metric) => metric.id === "uv");
-  const moonPhaseImage = await moonPhaseImagePromise;
   const headers: Record<string, string> = {
     "cache-control": "private, no-store",
   };
-  const updatedStravaCookie = stravaConnection ? encodeStravaConnection(stravaConnection) : null;
-
-  if (updatedStravaCookie && stravaCookieValue && updatedStravaCookie !== stravaCookieValue) {
-    headers["set-cookie"] = serializeStravaCookie(updatedStravaCookie, request.nextUrl.protocol === "https:");
-  }
+  const moonPhaseImage = await moonPhaseImagePromise;
 
   return new ImageResponse(
     (
@@ -310,7 +287,6 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
         <CalendarProgress
           value={yearProgress}
           date={dateStamp}
-          rhr={healthMetrics.rhr}
           theme={theme}
           left={topEdgeInset}
           top={topIconRowTop}
@@ -318,11 +294,9 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
           scale={scale}
         />
 
-        <RunningSummary
-          summary={stravaSummary}
+        <HealthSummary
+          rhr={healthMetrics.rhr}
           vo2={healthMetrics.vo2}
-          cycle={healthMetrics.cycle}
-          exercise={healthMetrics.exercise}
           theme={theme}
           left={width - topEdgeInset - topMetricColumnWidth}
           top={topIconRowTop}
@@ -403,8 +377,6 @@ async function readHealthMetrics(request: NextRequest): Promise<HealthMetrics> {
     return {
       rhr: sanitizeHealthMetric(payload.RHR),
       vo2: sanitizeHealthMetric(payload.Vo2),
-      cycle: sanitizeHealthMetric(payload.Cycle),
-      exercise: sanitizeHealthMetric(payload.Ex),
     };
   } catch {
     return EMPTY_HEALTH_METRICS;
@@ -427,19 +399,6 @@ function sanitizeHealthMetric(value: unknown) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function serializeStravaCookie(value: string, secure: boolean) {
-  return [
-    `${STRAVA_CONNECTION_COOKIE}=${value}`,
-    "Path=/",
-    `Max-Age=${SIX_MONTHS_SECONDS}`,
-    "HttpOnly",
-    "SameSite=Lax",
-    secure ? "Secure" : null,
-  ]
-    .filter(Boolean)
-    .join("; ");
 }
 
 function StarryBackdrop({ width, height, theme }: { width: number; height: number; theme: ThemeTokens }) {
@@ -531,7 +490,6 @@ function hashUnit(index: number, salt: number) {
 function CalendarProgress({
   value,
   date,
-  rhr,
   theme,
   left,
   top,
@@ -540,7 +498,6 @@ function CalendarProgress({
 }: {
   value: string;
   date: string;
-  rhr: string | null;
   theme: ThemeTokens;
   left: number;
   top: number;
@@ -563,35 +520,27 @@ function CalendarProgress({
     >
       <SummaryMetricRow icon="timer" value={value} theme={theme} scale={scale} />
       <SummaryMetricRow icon="calendar" value={date} theme={theme} scale={scale} />
-      {rhr ? <SummaryMetricRow icon="heart-rate" value={rhr} theme={theme} scale={scale} /> : null}
     </div>
   );
 }
 
-function RunningSummary({
-  summary,
+function HealthSummary({
+  rhr,
   vo2,
-  cycle,
-  exercise,
   theme,
   left,
   top,
   width,
   scale,
 }: {
-  summary: StravaRunSummary | null;
+  rhr: string | null;
   vo2: string | null;
-  cycle: string | null;
-  exercise: string | null;
   theme: ThemeTokens;
   left: number;
   top: number;
   width: number;
   scale: number;
 }) {
-  const weeklyDistance = formatStravaDistance(summary?.lastWeekDistanceKm ?? null);
-  const monthlyDistance = formatStravaDistance(summary?.lastFourWeeksDistanceKm ?? null);
-
   return (
     <div
       style={{
@@ -606,15 +555,8 @@ function RunningSummary({
         color: theme.ink,
       }}
     >
-      {weeklyDistance ? (
-        <SummaryMetricRow icon="running-week" value={weeklyDistance} theme={theme} scale={scale} align="end" />
-      ) : null}
-      {monthlyDistance ? (
-        <SummaryMetricRow icon="running-month" value={monthlyDistance} theme={theme} scale={scale} align="end" />
-      ) : null}
+      {rhr ? <SummaryMetricRow icon="heart-rate" value={rhr} theme={theme} scale={scale} align="end" /> : null}
       {vo2 ? <SummaryMetricRow icon="heart-oxygen" value={vo2} theme={theme} scale={scale} align="end" /> : null}
-      {cycle ? <SummaryMetricRow icon="cycle" value={cycle} theme={theme} scale={scale} align="end" /> : null}
-      {exercise ? <SummaryMetricRow icon="exercise" value={exercise} theme={theme} scale={scale} align="end" /> : null}
     </div>
   );
 }
@@ -672,23 +614,7 @@ function SummaryIcon({ icon, theme, size }: { icon: SummaryIconName; theme: Them
     return <HeartRateIcon theme={theme} size={size} />;
   }
 
-  if (icon === "heart-oxygen") {
-    return <HeartOxygenIcon theme={theme} size={size} />;
-  }
-
-  if (icon === "running-week") {
-    return <RunningIcon theme={theme} size={size} />;
-  }
-
-  if (icon === "running-month") {
-    return <RunningRouteIcon theme={theme} size={size} />;
-  }
-
-  if (icon === "cycle") {
-    return <CycleIcon theme={theme} size={size} />;
-  }
-
-  return <ExerciseIcon theme={theme} size={size} />;
+  return <HeartOxygenIcon theme={theme} size={size} />;
 }
 
 function CalendarIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
@@ -788,126 +714,6 @@ function HeartOxygenIcon({ theme, size }: { theme: ThemeTokens; size: number }) 
   );
 }
 
-function RunningRouteIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
-      <path
-        d="M7 25 C12 17 20 15 25 7"
-        fill="none"
-        stroke={theme.ink}
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeDasharray="1 4"
-        opacity="0.72"
-      />
-      <circle cx="7" cy="25" r="3" fill="none" stroke={theme.accent} strokeWidth="2" />
-      <circle cx="25" cy="7" r="3" fill="none" stroke={theme.ink} strokeWidth="2" opacity="0.9" />
-      <path
-        d="M13 19 L17 16 M17 16 L16 21 M17 16 L21 18"
-        fill="none"
-        stroke={theme.accent}
-        strokeWidth="1.9"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function CycleIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
-      <path
-        d="M24.8 11.2 C23.2 8.1 20 6 16.2 6 C10.7 6 6.3 10.3 6.3 15.8"
-        fill="none"
-        stroke={theme.ink}
-        strokeWidth="2.1"
-        strokeLinecap="round"
-      />
-      <path
-        d="M21.5 10.8 H25.3 V7"
-        fill="none"
-        stroke={theme.accent}
-        strokeWidth="2.1"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M7.2 20.8 C8.8 23.9 12 26 15.8 26 C21.3 26 25.7 21.7 25.7 16.2"
-        fill="none"
-        stroke={theme.ink}
-        strokeWidth="2.1"
-        strokeLinecap="round"
-        opacity="0.82"
-      />
-      <path
-        d="M10.5 21.2 H6.7 V25"
-        fill="none"
-        stroke={theme.accent}
-        strokeWidth="2.1"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function ExerciseIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
-      <path
-        d="M7 12 V20 M11 10 V22 M21 10 V22 M25 12 V20 M11 16 H21"
-        fill="none"
-        stroke={theme.ink}
-        strokeWidth="2.2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M4 16 H7 M25 16 H28"
-        fill="none"
-        stroke={theme.accent}
-        strokeWidth="2.2"
-        strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function RunningIcon({ theme, size }: { theme: ThemeTokens; size: number }) {
-  const stridePath = [
-    "M28.5 15.5 C25 17.2 22.6 20.5 21.2 24.8 L28.8 29.2",
-    "M26.6 18.3 L18.8 20.2 L14 16.2",
-    "M27.5 18.8 L35.2 24.2 L41 22.8",
-    "M28.8 29.2 L37 32.2 L43.5 40.5 M43.5 40.5 L47 40.5",
-    "M26.6 28.2 L18.4 35.2 L10.5 35.2",
-  ].join(" ");
-
-  return (
-    <svg width={size} height={size} viewBox="0 0 48 48" style={{ display: "block" }}>
-      <circle cx="31.5" cy="8" r="3.8" fill="none" stroke={theme.ink} strokeWidth="3" opacity="0.92" />
-      <path
-        d={stridePath}
-        fill="none"
-        stroke={theme.ink}
-        strokeWidth="3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity="0.9"
-      />
-      <path
-        d="M21.2 24.8 C24.2 25.6 26.6 27 28.8 29.2"
-        fill="none"
-        stroke={theme.ink}
-        strokeWidth="2.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity="0.5"
-      />
-    </svg>
-  );
-}
-
 function SunTimeMarker({
   icon,
   value,
@@ -964,13 +770,23 @@ function MetricDial({
 }) {
   const valueFontSize = metric.id === "wind" ? 35 * scale : 49 * scale;
   const hasSubValue = Boolean(metric.subValue);
+  const windDirection =
+    metric.id === "wind" && typeof metric.direction === "number" && Number.isFinite(metric.direction)
+      ? metric.direction
+      : null;
+  const hasDirection = windDirection !== null;
+  const hasDetail = hasSubValue || hasDirection;
   const dialColor = getMetricDialColor(metric.id, theme);
 
   return (
     <div style={{ display: "flex", position: "relative", width: size, height: size }}>
-      {metric.hideDial ? null : (
-        <DialRings progress={metric.graph ?? 0.2} theme={theme} size={size} accent={dialColor} />
-      )}
+      <DialRings
+        progress={metric.graph ?? 0.2}
+        theme={theme}
+        size={size}
+        accent={dialColor}
+        showProgress={!metric.hideDialProgress}
+      />
       <div
         style={{
           display: "flex",
@@ -990,7 +806,7 @@ function MetricDial({
           position: "absolute",
           left: 0,
           right: 0,
-          top: hasSubValue ? size * 0.49 : size * 0.54,
+          top: hasDetail ? size * 0.49 : size * 0.54,
           justifyContent: "center",
         }}
       >
@@ -998,7 +814,7 @@ function MetricDial({
           {metric.value}
         </span>
       </div>
-      {hasSubValue ? (
+      {hasDetail ? (
         <div
           style={{
             display: "flex",
@@ -1011,27 +827,36 @@ function MetricDial({
             gap: 8 * scale,
           }}
         >
-          {metric.id === "wind" ? <DirectionGlyph theme={theme} size={17 * scale} /> : null}
-          <span style={{ color: theme.accent, fontSize: 23 * scale, fontWeight: 300, lineHeight: 1 }}>
-            {metric.subValue}
-          </span>
+          {windDirection !== null ? (
+            <DirectionGlyph theme={theme} size={31 * scale} direction={windDirection} />
+          ) : null}
+          {hasSubValue ? (
+            <span style={{ color: theme.accent, fontSize: 23 * scale, fontWeight: 300, lineHeight: 1 }}>
+              {metric.subValue}
+            </span>
+          ) : null}
         </div>
       ) : null}
     </div>
   );
 }
 
-function DirectionGlyph({ theme, size }: { theme: ThemeTokens; size: number }) {
+function DirectionGlyph({ theme, size, direction }: { theme: ThemeTokens; size: number; direction: number }) {
+  const rotation = normalizeDegrees(direction);
+
   return (
-    <svg width={size} height={size} viewBox="0 0 20 20" style={{ display: "block" }}>
-      <path
-        d="M3 3 L17 9 L10 11 L8 18 Z"
-        fill="none"
-        stroke={theme.accent}
-        strokeWidth="2"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
+    <svg width={size} height={size} viewBox="0 0 32 32" style={{ display: "block" }}>
+      <g transform={`rotate(${rotation} 16 16)`}>
+        <path
+          d="M16 4 L24 27 L16 22 L8 27 Z"
+          fill="none"
+          stroke={theme.accent}
+          strokeWidth="2.6"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        <path d="M16 4 V22" fill="none" stroke={theme.ink} strokeWidth="1.7" strokeLinecap="round" opacity="0.72" />
+      </g>
     </svg>
   );
 }
@@ -1219,11 +1044,13 @@ function DialRings({
   theme,
   size,
   accent,
+  showProgress = true,
 }: {
   progress: number;
   theme: ThemeTokens;
   size: number;
   accent: string;
+  showProgress?: boolean;
 }) {
   const center = size / 2;
   const shellRadius = size * 0.47;
@@ -1246,15 +1073,17 @@ function DialRings({
       />
       <circle cx={center} cy={center} r={radius} fill="none" stroke={theme.line} strokeOpacity="0.58" />
       <circle cx={center} cy={center} r={innerRadius} fill="none" stroke={theme.line} strokeOpacity="0.24" />
-      <path
-        d={arcPath(center, center, radius, arcStart, arcEnd)}
-        fill="none"
-        stroke={accent}
-        strokeWidth={3.4}
-        strokeLinecap="round"
-        strokeOpacity="0.9"
-      />
-      <circle cx={end.x} cy={end.y} r={3.3} fill={accent} opacity="0.95" />
+      {showProgress ? (
+        <path
+          d={arcPath(center, center, radius, arcStart, arcEnd)}
+          fill="none"
+          stroke={accent}
+          strokeWidth={3.4}
+          strokeLinecap="round"
+          strokeOpacity="0.9"
+        />
+      ) : null}
+      {showProgress ? <circle cx={end.x} cy={end.y} r={3.3} fill={accent} opacity="0.95" /> : null}
       <circle cx={center} cy={center} r={size * 0.495} fill="none" stroke={theme.line} strokeOpacity="0.2" />
     </svg>
   );
@@ -1385,12 +1214,8 @@ function normalizeRatio(value: number | null, min: number, max: number) {
   return Math.min(1, Math.max(0, (value - min) / (max - min)));
 }
 
-async function safelyGetStravaRunSummary(now: Date, stravaConnection: ReturnType<typeof decodeStravaConnection>) {
-  try {
-    return await getStravaRunSummary(now, stravaConnection);
-  } catch {
-    return null;
-  }
+function normalizeDegrees(value: number) {
+  return ((value % 360) + 360) % 360;
 }
 
 function formatOptionalTime12h(value: string | null) {
@@ -1446,18 +1271,6 @@ function formatDayMonthInTimeZone(date: Date, timeZone: string) {
   }
 }
 
-function formatStravaDistance(value: number | null) {
-  if (value === null || !Number.isFinite(value) || value < 0) {
-    return null;
-  }
-
-  if (value >= 100) {
-    return `${Math.round(value)} km`;
-  }
-
-  return `${value.toFixed(1)} km`;
-}
-
 function formatTime12h(value: string | null) {
   if (!value) {
     return "--";
@@ -1499,17 +1312,6 @@ function formatPercent(value: number | null) {
 
 function formatWind(value: number | null, unit: string) {
   return value === null ? "--" : `${Math.round(value)} ${unit}`;
-}
-
-function formatWindDirection(value: number | null) {
-  if (value === null) {
-    return null;
-  }
-
-  const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-  const index = Math.round((((value % 360) + 360) % 360) / 45) % directions.length;
-
-  return directions[index];
 }
 
 function formatUv(value: number | null) {

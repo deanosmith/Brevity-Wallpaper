@@ -369,10 +369,10 @@ export function WallpaperStudio() {
                   <span>{stravaStatus?.source === "browser" ? "Browser connection" : "Running data"}</span>
                   <p>
                     {stravaStatus?.source === "browser"
-                      ? "OAuth is connected for previews and downloads in this browser."
+                      ? "OAuth is connected in this browser for future running metrics."
                       : stravaStatus?.source === "environment"
-                        ? "Using STRAVA_* environment values for the wallpaper and Shortcuts."
-                        : "Connect for browser previews, or use STRAVA_REFRESH_TOKEN for Shortcuts."}
+                        ? "STRAVA_* environment values are configured for future running metrics."
+                        : "Connect to keep running-metric access ready for a future layout."}
                   </p>
                 </div>
                 <div className="actions">
