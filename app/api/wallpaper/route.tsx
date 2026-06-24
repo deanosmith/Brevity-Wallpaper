@@ -1,14 +1,5 @@
 import { ImageResponse } from "next/og";
 import type { NextRequest } from "next/server";
-import type { StaticImageData } from "next/image";
-import moonFirstQuarter from "@/moon-phases/phase_first_quarter.png";
-import moonFull from "@/moon-phases/phase_full.png";
-import moonNew from "@/moon-phases/phase_new.png";
-import moonThirdQuarter from "@/moon-phases/phase_third_quarter.png";
-import moonWaningCrescent from "@/moon-phases/phase_waning_crescent.png";
-import moonWaningGibbous from "@/moon-phases/phase_waning_gibbous.png";
-import moonWaxingCrescent from "@/moon-phases/phase_waxing_crescent.png";
-import moonWaxingGibbous from "@/moon-phases/phase_waxing_gibbous.png";
 import { DISPLAY_CONFIG } from "@/lib/display-config";
 import {
   decodeStravaConnection,
@@ -89,6 +80,11 @@ type MoonPhaseData = {
   illumination: number;
 };
 
+type MoonPhaseAsset = {
+  path: string;
+  contentType: "image/png";
+};
+
 const SYNODIC_MONTH_DAYS = 29.530588853;
 const KNOWN_NEW_MOON_UTC = Date.UTC(2000, 0, 6, 18, 14);
 const SIX_MONTHS_SECONDS = 60 * 60 * 24 * 180;
@@ -99,10 +95,26 @@ const TEMPERATURE_DIAL_MAX = 30;
 const TEMPERATURE_DIAL_SWEEP = 356;
 const DEFAULT_WALLPAPER_TIME_ZONE = "Europe/Copenhagen";
 const MAX_HEALTH_TEXT_LENGTH = 18;
+const MOON_PHASE_ASSET_VERSION = "hires-1024-20260624";
+const MOON_PHASE_ASSET_TIMEOUT_MS = 2500;
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10] as const;
 const EMPTY_POSTED_HEALTH_DATA: PostedHealthData = {
   rhr: null,
   vo2: null,
 };
+
+const MOON_PHASE_ASSETS = {
+  new: { path: "/moon-phases/phase_new.png", contentType: "image/png" },
+  waxingCrescent: { path: "/moon-phases/phase_waxing_crescent.png", contentType: "image/png" },
+  firstQuarter: { path: "/moon-phases/phase_first_quarter.png", contentType: "image/png" },
+  waxingGibbous: { path: "/moon-phases/phase_waxing_gibbous.png", contentType: "image/png" },
+  full: { path: "/moon-phases/phase_full.png", contentType: "image/png" },
+  waningGibbous: { path: "/moon-phases/phase_waning_gibbous.png", contentType: "image/png" },
+  thirdQuarter: { path: "/moon-phases/phase_third_quarter.png", contentType: "image/png" },
+  waningCrescent: { path: "/moon-phases/phase_waning_crescent.png", contentType: "image/png" },
+} satisfies Record<string, MoonPhaseAsset>;
+
+const moonPhaseImageCache = new Map<string, Promise<string | null>>();
 
 const THEMES: Record<WallpaperTheme, ThemeTokens> = {
   dawn: {
@@ -207,7 +219,7 @@ async function renderWallpaper(request: NextRequest, health: PostedHealthData) {
   const sunMarkerTop = moonCenterY - 48 * scale;
   const moonFrameSize = 318 * scale;
   const moonDiskSize = 226 * scale;
-  const moonTextureUrl = new URL(getMoonPhaseImage(moonPhase.phase).src, request.nextUrl.origin).toString();
+  const moonImageUrl = await loadMoonPhaseImageSource(getMoonPhaseAsset(moonPhase.phase), request.nextUrl.origin);
   const metricSize = 210 * scale;
   const metricGap = 45 * scale;
   const metricTop = height * 0.355 - displayLift;
@@ -362,7 +374,7 @@ async function renderWallpaper(request: NextRequest, health: PostedHealthData) {
             justifyContent: "center",
           }}
         >
-          <MoonPhase phase={moonPhase} imageUrl={moonTextureUrl} size={moonDiskSize} />
+          <MoonPhase phase={moonPhase} imageUrl={moonImageUrl} size={moonDiskSize} />
         </div>
 
         <div
@@ -1527,41 +1539,128 @@ function positiveModulo(value: number, divisor: number) {
   return ((value % divisor) + divisor) % divisor;
 }
 
-function getMoonPhaseImage(phase: number): StaticImageData {
+function getMoonPhaseAsset(phase: number): MoonPhaseAsset {
   const normalized = positiveModulo(phase, 1);
 
   if (normalized < 1 / 16 || normalized >= 15 / 16) {
-    return moonNew;
+    return MOON_PHASE_ASSETS.new;
   }
 
   if (normalized < 3 / 16) {
-    return moonWaxingCrescent;
+    return MOON_PHASE_ASSETS.waxingCrescent;
   }
 
   if (normalized < 5 / 16) {
-    return moonFirstQuarter;
+    return MOON_PHASE_ASSETS.firstQuarter;
   }
 
   if (normalized < 7 / 16) {
-    return moonWaxingGibbous;
+    return MOON_PHASE_ASSETS.waxingGibbous;
   }
 
   if (normalized < 9 / 16) {
-    return moonFull;
+    return MOON_PHASE_ASSETS.full;
   }
 
   if (normalized < 11 / 16) {
-    return moonWaningGibbous;
+    return MOON_PHASE_ASSETS.waningGibbous;
   }
 
   if (normalized < 13 / 16) {
-    return moonThirdQuarter;
+    return MOON_PHASE_ASSETS.thirdQuarter;
   }
 
-  return moonWaningCrescent;
+  return MOON_PHASE_ASSETS.waningCrescent;
 }
 
-function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: string; size: number }) {
+async function loadMoonPhaseImageSource(asset: MoonPhaseAsset, origin: string) {
+  const cacheKey = `${asset.path}?v=${MOON_PHASE_ASSET_VERSION}`;
+  const cached = moonPhaseImageCache.get(cacheKey);
+
+  if (cached) {
+    return cached;
+  }
+
+  const imageSourcePromise = fetchMoonPhaseImageSource(asset, origin).catch((error: unknown) => {
+    console.error("Moon phase asset failed to load.", error);
+    return null;
+  });
+
+  moonPhaseImageCache.set(cacheKey, imageSourcePromise);
+
+  const imageSource = await imageSourcePromise;
+
+  if (!imageSource) {
+    moonPhaseImageCache.delete(cacheKey);
+  }
+
+  return imageSource;
+}
+
+async function fetchMoonPhaseImageSource(asset: MoonPhaseAsset, origin: string) {
+  const assetUrl = new URL(asset.path, origin);
+  assetUrl.searchParams.set("v", MOON_PHASE_ASSET_VERSION);
+
+  const response = await fetch(assetUrl, {
+    cache: "force-cache",
+    signal: moonPhaseAssetSignal(),
+  });
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() ?? "";
+
+  if (!response.ok) {
+    throw new Error(`Moon asset ${asset.path} returned HTTP ${response.status} with ${contentType || "unknown content type"}.`);
+  }
+
+  if (contentType !== asset.contentType) {
+    throw new Error(`Moon asset ${asset.path} returned ${contentType || "unknown content type"} instead of ${asset.contentType}.`);
+  }
+
+  const imageBuffer = await response.arrayBuffer();
+
+  if (!isPngArrayBuffer(imageBuffer)) {
+    throw new Error(`Moon asset ${asset.path} did not contain a valid PNG signature.`);
+  }
+
+  return `data:${asset.contentType};base64,${arrayBufferToBase64(imageBuffer)}`;
+}
+
+function moonPhaseAssetSignal() {
+  const abortSignal = AbortSignal as typeof AbortSignal & { timeout?: (milliseconds: number) => AbortSignal };
+
+  if (abortSignal.timeout) {
+    return abortSignal.timeout(MOON_PHASE_ASSET_TIMEOUT_MS);
+  }
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), MOON_PHASE_ASSET_TIMEOUT_MS);
+
+  return controller.signal;
+}
+
+function isPngArrayBuffer(buffer: ArrayBuffer) {
+  if (buffer.byteLength < PNG_SIGNATURE.length) {
+    return false;
+  }
+
+  const bytes = new Uint8Array(buffer, 0, PNG_SIGNATURE.length);
+
+  return PNG_SIGNATURE.every((value, index) => bytes[index] === value);
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  const chunks: string[] = [];
+
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    const end = Math.min(offset + chunkSize, bytes.length);
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, end)));
+  }
+
+  return btoa(chunks.join(""));
+}
+
+function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: string | null; size: number }) {
   const frameSize = size + 92;
   const illumination = Math.round(phase.illumination * 100);
 
@@ -1588,19 +1687,32 @@ function MoonPhase({ phase, imageUrl, size }: { phase: MoonPhaseData; imageUrl: 
           justifyContent: "center",
         }}
       >
-        <img
-          alt={`Moon phase ${illumination}% illuminated`}
-          src={imageUrl}
-          width={size}
-          height={size}
-          style={{
-            display: "block",
-            width: size,
-            height: size,
-            objectFit: "cover",
-            borderRadius: 999,
-          }}
-        />
+        {imageUrl ? (
+          <img
+            alt={`Moon phase ${illumination}% illuminated`}
+            src={imageUrl}
+            width={size}
+            height={size}
+            style={{
+              display: "block",
+              width: size,
+              height: size,
+              objectFit: "cover",
+              borderRadius: 999,
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              display: "flex",
+              width: size,
+              height: size,
+              borderRadius: 999,
+              background: "#050505",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+            }}
+          />
+        )}
       </div>
     </div>
   );
