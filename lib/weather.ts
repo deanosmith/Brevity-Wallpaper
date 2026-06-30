@@ -108,7 +108,11 @@ export async function getWeatherSnapshot({
   });
 
   const response = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`, {
-    next: { revalidate: 60 * 30 },
+    cache: "no-store",
+    headers: {
+      "cache-control": "no-cache",
+      pragma: "no-cache",
+    },
     signal: weatherRequestSignal(),
   });
 

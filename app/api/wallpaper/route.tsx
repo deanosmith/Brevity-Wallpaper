@@ -14,6 +14,8 @@ import {
 import type { WallpaperTheme } from "@/lib/wallpaper-config";
 
 export const runtime = "edge";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 type ThemeTokens = {
   background: string;
@@ -93,6 +95,13 @@ const MOON_PHASE_ASSET_VERSION = "hires-1024-20260623";
 const MOON_PHASE_ASSET_TIMEOUT_MS = 2500;
 const DEFAULT_WALLPAPER_TIME_ZONE = "Europe/Copenhagen";
 const HEALTH_METRIC_MAX_LENGTH = 18;
+const FRESH_WALLPAPER_HEADERS = {
+  "Cache-Control": "private, no-store, no-cache, max-age=0, must-revalidate",
+  "CDN-Cache-Control": "no-store",
+  Expires: "0",
+  Pragma: "no-cache",
+  "Vercel-CDN-Cache-Control": "no-store",
+};
 const EMPTY_HEALTH_METRICS: HealthMetrics = {
   rhr: null,
   vo2: null,
@@ -215,45 +224,55 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
   const sunriseTime = DISPLAY_CONFIG.sections.sunrise ? formatTime12h(weather.sunrise) : null;
   const sunsetTime = DISPLAY_CONFIG.sections.sunset ? formatTime12h(weather.sunset) : null;
   const moonPhaseImagePromise = getMoonPhaseImage(moonPhase, request.nextUrl.origin);
+  const highTemperature = DISPLAY_CONFIG.sections.weatherToday.high
+    ? formatTemperature(weather.high, weather.temperatureUnitLabel)
+    : null;
+  const lowTemperature = DISPLAY_CONFIG.sections.weatherToday.low
+    ? formatTemperature(weather.low, weather.temperatureUnitLabel)
+    : null;
+  const hasRequiredTemperatures =
+    (!DISPLAY_CONFIG.sections.weatherToday.high || highTemperature !== null) &&
+    (!DISPLAY_CONFIG.sections.weatherToday.low || lowTemperature !== null);
   const temperatureRange: TemperatureRangeData | null =
-    DISPLAY_CONFIG.sections.weatherToday.high || DISPLAY_CONFIG.sections.weatherToday.low
+    (DISPLAY_CONFIG.sections.weatherToday.high || DISPLAY_CONFIG.sections.weatherToday.low) && hasRequiredTemperatures
       ? {
-          high: DISPLAY_CONFIG.sections.weatherToday.high
-            ? formatTemperature(weather.high, weather.temperatureUnitLabel)
-            : null,
-          low: DISPLAY_CONFIG.sections.weatherToday.low
-            ? formatTemperature(weather.low, weather.temperatureUnitLabel)
-            : null,
+          high: highTemperature,
+          low: lowTemperature,
           highValue: DISPLAY_CONFIG.sections.weatherToday.high ? weather.high : null,
           lowValue: DISPLAY_CONFIG.sections.weatherToday.low ? weather.low : null,
           highGraph: normalizeTemperature(weather.high),
           lowGraph: normalizeTemperature(weather.low),
         }
       : null;
+  const rainValue = DISPLAY_CONFIG.sections.weatherToday.rainChance ? formatPercent(weather.rainChance) : null;
+  const windValue = DISPLAY_CONFIG.sections.weatherToday.windMax
+    ? formatWind(weather.windMax, weather.windUnitLabel)
+    : null;
+  const uvValue = DISPLAY_CONFIG.sections.weatherToday.uvMax ? formatUv(weather.uvMax) : null;
   const weatherMetricItems: Array<MetricData | null> = [
-    DISPLAY_CONFIG.sections.weatherToday.rainChance
+    rainValue
       ? {
           id: "rain",
-          value: formatPercent(weather.rainChance),
+          value: rainValue,
           icon: "rain",
           graph: normalizePercent(weather.rainChance),
           hideDialProgress: isRoundedZero(weather.rainChance),
           subValue: formatRainPeakTime(weather.rainChance, weather.rainPeakTime),
         }
       : null,
-    DISPLAY_CONFIG.sections.weatherToday.windMax
+    windValue
       ? {
           id: "wind",
-          value: formatWind(weather.windMax, weather.windUnitLabel),
+          value: windValue,
           icon: "wind",
           graph: normalizeWind(weather.windMax),
           direction: weather.windDirection,
         }
       : null,
-    DISPLAY_CONFIG.sections.weatherToday.uvMax
+    uvValue
       ? {
           id: "uv",
-          value: formatUv(weather.uvMax),
+          value: uvValue,
           icon: "uv",
           graph: normalizeUv(weather.uvMax),
         }
@@ -263,9 +282,6 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
   const rainMetric = weatherMetrics.find((metric) => metric.id === "rain");
   const windMetric = weatherMetrics.find((metric) => metric.id === "wind");
   const uvMetric = weatherMetrics.find((metric) => metric.id === "uv");
-  const headers: Record<string, string> = {
-    "cache-control": "private, no-store",
-  };
   const moonPhaseImage = await moonPhaseImagePromise;
 
   return new ImageResponse(
@@ -361,7 +377,7 @@ async function renderWallpaper(request: NextRequest, healthMetrics: HealthMetric
     {
       width,
       height,
-      headers,
+      headers: FRESH_WALLPAPER_HEADERS,
     },
   );
 }
@@ -497,7 +513,7 @@ function CalendarProgress({
   scale,
 }: {
   value: string;
-  date: string;
+  date: string | null;
   theme: ThemeTokens;
   left: number;
   top: number;
@@ -519,7 +535,7 @@ function CalendarProgress({
       }}
     >
       <SummaryMetricRow icon="timer" value={value} theme={theme} scale={scale} />
-      <SummaryMetricRow icon="calendar" value={date} theme={theme} scale={scale} />
+      {date ? <SummaryMetricRow icon="calendar" value={date} theme={theme} scale={scale} /> : null}
     </div>
   );
 }
@@ -777,6 +793,10 @@ function MetricDial({
   const hasDirection = windDirection !== null;
   const hasDetail = hasSubValue || hasDirection;
   const dialColor = getMetricDialColor(metric.id, theme);
+  const valueTop = hasDetail ? size * 0.47 : size * 0.54;
+  const detailTop = hasDirection ? size * 0.67 : size * 0.68;
+  const directionSize = 44 * scale;
+  const detailFontSize = 22 * scale;
 
   return (
     <div style={{ display: "flex", position: "relative", width: size, height: size }}>
@@ -806,7 +826,7 @@ function MetricDial({
           position: "absolute",
           left: 0,
           right: 0,
-          top: hasDetail ? size * 0.49 : size * 0.54,
+          top: valueTop,
           justifyContent: "center",
         }}
       >
@@ -821,17 +841,17 @@ function MetricDial({
             position: "absolute",
             left: 0,
             right: 0,
-            top: size * 0.76,
+            top: detailTop,
             alignItems: "center",
             justifyContent: "center",
             gap: 8 * scale,
           }}
         >
           {windDirection !== null ? (
-            <DirectionGlyph theme={theme} size={31 * scale} direction={windDirection} />
+            <DirectionGlyph theme={theme} size={directionSize} direction={windDirection} />
           ) : null}
           {hasSubValue ? (
-            <span style={{ color: theme.accent, fontSize: 23 * scale, fontWeight: 300, lineHeight: 1 }}>
+            <span style={{ color: theme.accent, fontSize: detailFontSize, fontWeight: 400, lineHeight: 1 }}>
               {metric.subValue}
             </span>
           ) : null}
@@ -903,12 +923,16 @@ function TemperatureDial({
           gap: 7 * scale,
         }}
       >
-        <span style={{ color: highColor, fontSize: 45 * scale, fontWeight: 500, lineHeight: 0.95 }}>
-          {range.high ?? "--"}
-        </span>
-        <span style={{ color: lowColor, fontSize: 31 * scale, fontWeight: 400, lineHeight: 0.95 }}>
-          {range.low ?? "--"}
-        </span>
+        {range.high ? (
+          <span style={{ color: highColor, fontSize: 45 * scale, fontWeight: 500, lineHeight: 0.95 }}>
+            {range.high}
+          </span>
+        ) : null}
+        {range.low ? (
+          <span style={{ color: lowColor, fontSize: 31 * scale, fontWeight: 400, lineHeight: 0.95 }}>
+            {range.low}
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -1245,13 +1269,11 @@ function formatYearProgress(timestamp: number) {
 }
 
 function formatDayMonth(date: Date) {
-  const timeZone =
-    process.env.WALLPAPER_TIME_ZONE?.trim() || process.env.STRAVA_TIME_ZONE?.trim() || DEFAULT_WALLPAPER_TIME_ZONE;
+  const timeZone = process.env.WALLPAPER_TIME_ZONE?.trim() || DEFAULT_WALLPAPER_TIME_ZONE;
 
   return (
     formatDayMonthInTimeZone(date, timeZone) ??
-    formatDayMonthInTimeZone(date, DEFAULT_WALLPAPER_TIME_ZONE) ??
-    "--/--"
+    formatDayMonthInTimeZone(date, DEFAULT_WALLPAPER_TIME_ZONE)
   );
 }
 
@@ -1262,8 +1284,12 @@ function formatDayMonthInTimeZone(date: Date, timeZone: string) {
       month: "2-digit",
       timeZone,
     }).formatToParts(date);
-    const day = parts.find((part) => part.type === "day")?.value ?? "--";
-    const month = parts.find((part) => part.type === "month")?.value ?? "--";
+    const day = parts.find((part) => part.type === "day")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+
+    if (!day || !month) {
+      return null;
+    }
 
     return `${day}/${month}`;
   } catch {
@@ -1273,26 +1299,34 @@ function formatDayMonthInTimeZone(date: Date, timeZone: string) {
 
 function formatTime12h(value: string | null) {
   if (!value) {
-    return "--";
+    return null;
   }
 
   const time = value.split("T")[1]?.slice(0, 5);
   const [hourValue, minute = "00"] = time?.split(":") ?? [];
   const hour = Number(hourValue);
+  const minuteValue = Number(minute);
 
-  if (!Number.isFinite(hour)) {
-    return "--";
+  if (
+    !Number.isFinite(hour) ||
+    !Number.isFinite(minuteValue) ||
+    hour < 0 ||
+    hour > 23 ||
+    minuteValue < 0 ||
+    minuteValue > 59
+  ) {
+    return null;
   }
 
   const period = hour >= 12 ? "PM" : "AM";
   const hour12 = hour % 12 || 12;
 
-  return `${hour12}:${minute} ${period}`;
+  return `${hour12}:${String(minuteValue).padStart(2, "0")} ${period}`;
 }
 
 function formatTemperature(value: number | null, unit: string) {
-  if (value === null) {
-    return "--";
+  if (!isFiniteNumber(value)) {
+    return null;
   }
 
   return `${Math.round(value)}°${compactTemperatureUnit(unit)}`;
@@ -1307,15 +1341,19 @@ function compactTemperatureUnit(unit: string) {
 }
 
 function formatPercent(value: number | null) {
-  return value === null ? "--" : `${Math.round(value)}%`;
+  return isFiniteNumber(value) ? `${Math.round(value)}%` : null;
 }
 
 function formatWind(value: number | null, unit: string) {
-  return value === null ? "--" : `${Math.round(value)} ${unit}`;
+  return isFiniteNumber(value) ? `${Math.round(value)} ${unit}` : null;
 }
 
 function formatUv(value: number | null) {
-  return value === null ? "--" : String(Math.round(value));
+  return isFiniteNumber(value) ? String(Math.round(value)) : null;
+}
+
+function isFiniteNumber(value: number | null): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 function getMoonPhase(timestamp: number): MoonPhaseData {
@@ -1414,6 +1452,10 @@ function arrayBufferToBase64(buffer: ArrayBuffer) {
 }
 
 function MoonPhase({ image, size }: { image: MoonPhaseImageData; size: number }) {
+  if (!image.src) {
+    return null;
+  }
+
   const frameSize = size + 92;
   const illumination = Math.round(Math.max(0, Math.min(1, image.illumination)) * 100);
 
@@ -1440,32 +1482,17 @@ function MoonPhase({ image, size }: { image: MoonPhaseImageData; size: number })
           justifyContent: "center",
         }}
       >
-        {image.src ? (
-          <img
-            src={image.src}
-            width={size}
-            height={size}
-            alt={`${image.label}, ${illumination}% illuminated`}
-            style={{
-              display: "block",
-              width: size,
-              height: size,
-            }}
-          />
-        ) : (
-          <div
-            style={{
-              display: "flex",
-              width: size,
-              height: size,
-              borderRadius: 999,
-              background: "#020202",
-              borderColor: "rgba(255, 255, 255, 0.18)",
-              borderStyle: "solid",
-              borderWidth: 1,
-            }}
-          />
-        )}
+        <img
+          src={image.src}
+          width={size}
+          height={size}
+          alt={`${image.label}, ${illumination}% illuminated`}
+          style={{
+            display: "block",
+            width: size,
+            height: size,
+          }}
+        />
       </div>
     </div>
   );

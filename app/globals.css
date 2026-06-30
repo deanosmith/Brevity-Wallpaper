@@ -264,55 +264,6 @@ h1 {
   pointer-events: none;
 }
 
-.status-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--ink);
-  font-size: 12px;
-  font-weight: 800;
-  text-transform: none;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--muted);
-  opacity: 0.62;
-}
-
-.status-dot.active {
-  background: #7bdc9b;
-  opacity: 1;
-}
-
-.strava-box {
-  display: grid;
-  gap: 12px;
-  padding: 13px;
-  border: 1px solid rgba(241, 187, 134, 0.16);
-  border-radius: 8px;
-  background: rgba(8, 9, 14, 0.42);
-}
-
-.strava-copy {
-  display: grid;
-  gap: 4px;
-}
-
-.strava-copy span {
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 850;
-}
-
-.strava-copy p {
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
 .search-results {
   display: grid;
   gap: 6px;

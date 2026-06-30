@@ -22,6 +22,8 @@ Missing, empty, or non-text metric values are ignored, so the wallpaper still re
 
 For a daily wallpaper, run that Shortcut from a personal automation.
 
+The wallpaper endpoint is intentionally uncached. If weather or asset retrieval fails, the affected wallpaper component is omitted instead of showing stale or placeholder data.
+
 ## iPhone 15 Demo
 
 <img width="299" height="639" alt="image" src="https://github.com/user-attachments/assets/3a99047d-5b10-41bc-a204-cce31a31e9ca" />
@@ -34,32 +36,10 @@ For a daily wallpaper, run that Shortcut from a personal automation.
 - Sunset
 - Moon phase for the generation time
 
-## Strava Environment Variables
+## Environment Variables
 
-For local development, place the Strava values in `.env`. On Vercel, add the same keys under Environment Variables.
+For local development, place optional values in `.env`. On Vercel, add the same keys under Environment Variables.
 
-Required for the Connect Strava button:
-
-- `STRAVA_CLIENT_ID`
-- `STRAVA_CLIENT_SECRET`
-
-Optional server-side tokens for future running metrics:
-
-- `STRAVA_REFRESH_TOKEN`
-- `STRAVA_ACCESS_TOKEN`
-- `STRAVA_ACCESS_TOKEN_EXPIRES_AT`
-
-Optional:
-
-- `STRAVA_REDIRECT_URI`
-- `STRAVA_SCOPE`
-- `STRAVA_TIME_ZONE`
 - `WALLPAPER_TIME_ZONE`
-
-The app requests `activity:read_all` by default so private runs can be included. Set `STRAVA_SCOPE=activity:read` if you only want activities visible to Everyone and Followers. `STRAVA_ACCESS_TOKEN_EXPIRES_AT` is optional; if it is absent, the app will try the access token as-is.
-Strava can rotate refresh tokens after a refresh, so for long-running server-side use, keep `STRAVA_REFRESH_TOKEN` current in Vercel.
-In the Strava developer settings, set the authorization callback domain to your deployed host. Localhost and `127.0.0.1` are allowed for local development.
-
-The current wallpaper layout does not render Strava metrics. The Connect Strava button and server-side token settings are retained for future running-metric work.
 
 `Feel free to fork and customise`
